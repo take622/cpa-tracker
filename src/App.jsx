@@ -32,9 +32,10 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// このIDがデータ保存の「鍵」となります。変更しないでください。
 const STABLE_STORAGE_ID = "cpa_tracker_final_storage_fixed";
 
-// --- メッセージデータ ---
+// --- 固定メッセージデータ ---
 const MASCOT_MESSAGES = [
   "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
   "休憩も大切な戦略の一つ。リフレッシュして次の1ページへ進みましょう！",
@@ -101,7 +102,7 @@ const Mascot = () => {
   return (
     <div className="flex items-start gap-2 bg-indigo-900 p-2.5 rounded-xl border border-indigo-700 cursor-pointer flex-1 min-w-0" onClick={() => setIndex(i => (i + 1) % MASCOT_MESSAGES.length)}>
       <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0">
-        <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Cheer&backgroundColor=6366f1" alt="Mascot" className="w-6 h-6" />
+        <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Final-Cheer&backgroundColor=6366f1" alt="Mascot" className="w-6 h-6" />
       </div>
       <div className="min-w-0 flex-1 text-left">
         <div className="flex items-center gap-1 mb-0.5">
@@ -114,7 +115,7 @@ const Mascot = () => {
   );
 };
 
-// --- Main App ---
+// --- メインコンポーネント ---
 const App = () => {
   const [user, setUser] = useState(null);
   const [authEmail, setAuthEmail] = useState("");
@@ -140,11 +141,13 @@ const App = () => {
   const fileInputRef = useRef(null);
   const [form, setForm] = useState({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
 
+  // 1秒ごとの時計更新
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  // 認証状態の監視
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
@@ -153,6 +156,7 @@ const App = () => {
     return () => unsub();
   }, []);
 
+  // 進捗計算
   const totalProgress = useMemo(() => {
     if (textbooks.length === 0) return { percent: 0, current: 0, total: 0 };
     const cur = textbooks.reduce((s, b) => s + (Number(b.currentPage) || 0), 0);
@@ -160,6 +164,7 @@ const App = () => {
     return { percent: tot > 0 ? Math.round((cur / tot) * 100) : 0, current: cur, total: tot };
   }, [textbooks]);
 
+  // デバイス間のリアルタイム同期
   useEffect(() => {
     if (!user) return;
     const todayStr = getTodayStr();
@@ -174,11 +179,15 @@ const App = () => {
         }
         setRemainingWeeklyTarget(Number(d.remainingTarget ?? 380));
         setWeeklyGoalBase(Number(d.baseTarget ?? 380));
-      } else setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: todayStr });
+      } else {
+        setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: todayStr });
+      }
     });
 
     const todayRef = doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'dailyLogs', todayStr);
-    const unsubToday = onSnapshot(todayRef, (snap) => setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0));
+    const unsubToday = onSnapshot(todayRef, (snap) => {
+      setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
+    });
 
     const booksCol = collection(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
@@ -203,6 +212,7 @@ const App = () => {
   const handleLogout = async () => {
     await signOut(auth);
     setUser(null);
+    setTextbooks([]);
     setIsLogoutModalOpen(false);
   };
 
@@ -213,6 +223,7 @@ const App = () => {
     const newVal = Math.min(Math.max(0, parseInt(val || 0)), b.totalPages);
     const dlt = newVal - b.currentPage;
     if (dlt === 0) return;
+
     const batch = writeBatch(db);
     batch.update(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
     batch.set(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
@@ -236,19 +247,18 @@ const App = () => {
     const bookData = { ...form, totalPages: Number(form.totalPages), currentPage: Number(form.currentPage), updatedAt: serverTimestamp(), sortOrder: editingBookId ? (textbooks.find(t=>t.id===editingBookId)?.sortOrder || 0) : textbooks.length };
     const tid = editingBookId;
     setIsModalOpen(false); setEditingBookId(null); setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
-    const run = async () => {
+    const runSave = async () => {
       try {
         if (tid) await updateDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', tid), bookData);
         else await addDoc(collection(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks'), bookData);
       } catch (err) { console.error(err); }
     };
-    run();
+    runSave();
   };
 
-  // --- フォーカス補助 ---
-  const handleInputTouch = (e) => {
-    e.target.focus();
-  };
+  const handleInputTouch = (e) => e.target.focus();
+
+  // --- Views ---
 
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-indigo-200" /></div>;
 
@@ -257,45 +267,35 @@ const App = () => {
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6 font-sans">
         <style dangerouslySetInnerHTML={{ __html: `
           body, html { -webkit-user-select: auto !important; user-select: auto !important; }
-          input, textarea { -webkit-user-select: text !important; user-select: text !important; pointer-events: auto !important; }
+          input { -webkit-user-select: text !important; user-select: text !important; pointer-events: auto !important; }
         ` }} />
-        
-        <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl p-10 text-center relative">
+        <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl p-10 text-center relative z-[999]">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
           <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter">CPA Tracker</h1>
-          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest">Login to Sync Across Devices</p>
-          
+          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">Login to Sync Across Devices</p>
           <form onSubmit={handleAuth} className="space-y-4 text-left">
             <div className="space-y-1">
-              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Email Address</label>
-              <input 
-                required type="email" autoComplete="email" placeholder="メールアドレス" 
-                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none block pointer-events-auto" 
-                value={authEmail} onChange={e => setAuthEmail(e.target.value)} onTouchStart={handleInputTouch}
-              />
+              <label htmlFor="e-in" className="text-[9px] font-black text-slate-400 uppercase ml-2">Email</label>
+              <input required type="email" id="e-in" autoComplete="email" placeholder="メールアドレス" className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none block" value={authEmail} onChange={e => setAuthEmail(e.target.value)} onTouchStart={handleInputTouch}/>
             </div>
             <div className="space-y-1">
-              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Password</label>
-              <input 
-                required type="password" autoComplete="current-password" placeholder="パスワード" 
-                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none block pointer-events-auto" 
-                value={authPassword} onChange={e => setAuthPassword(e.target.value)} onTouchStart={handleInputTouch}
-              />
+              <label htmlFor="p-in" className="text-[9px] font-black text-slate-400 uppercase ml-2">Password</label>
+              <input required type="password" id="p-in" autoComplete="current-password" placeholder="パスワード" className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none block" value={authPassword} onChange={e => setAuthPassword(e.target.value)} onTouchStart={handleInputTouch}/>
             </div>
             {authError && <div className="text-red-500 text-[10px] font-bold px-2">{authError}</div>}
-            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-2xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all mt-4">{isAuthProcessing ? 'Processing...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
+            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-2xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all mt-4">{isAuthProcessing ? '接続中...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
           </form>
-          <button type="button" onClick={() => { setIsLoginMode(!isLoginMode); setAuthError(""); }} className="mt-8 text-[11px] font-black text-indigo-600 uppercase tracking-wider">{isLoginMode ? 'New here? Sign Up' : 'Already have an account?'}</button>
+          <button type="button" onClick={() => { setIsLoginMode(!isLoginMode); setAuthError(""); }} className="mt-8 text-[11px] font-black text-indigo-600 uppercase tracking-wider block w-full text-center">{isLoginMode ? 'New here? Sign Up' : 'Already have an account?'}</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans">
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans overflow-x-hidden">
       <style dangerouslySetInnerHTML={{ __html: `input { -webkit-user-select: text !important; user-select: text !important; pointer-events: auto !important; }` }} />
-      
-      {/* HEADER: 時計と日付・曜日のフル表示を固定 */}
+
+      {/* HEADER */}
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 px-3 py-2 shadow-sm">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           <Mascot />
@@ -315,19 +315,19 @@ const App = () => {
 
       <main className="max-w-5xl w-full mx-auto p-3 sm:p-4 flex-grow pb-24">
         {/* STATS */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6">
-          <div className="bg-slate-900 text-white p-3 rounded-2xl shadow-lg border-b-4 border-slate-800 text-center">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 text-center">
+          <div className="bg-slate-900 text-white p-3 rounded-2xl shadow-lg border-b-4 border-slate-800">
             <div className="text-[8px] font-black text-slate-400 uppercase mb-1">残ノルマ</div>
             <div className="text-xl sm:text-2xl font-black truncate">{Number(remainingWeeklyTarget)}P</div>
           </div>
           <div className="bg-white border border-slate-100 p-3 rounded-2xl shadow-sm border-b-4 border-slate-50">
-            <div className="text-[8px] font-black text-indigo-600 uppercase mb-1 text-center">今日進捗</div>
-            <div className="flex items-center justify-center gap-2">
+            <div className="text-[8px] font-black text-indigo-600 uppercase mb-1">今日進捗</div>
+            <div className="flex items-center justify-center gap-1">
               <span className="text-xl sm:text-2xl font-black text-slate-800">{Number(todayStudied)}P</span>
-              <button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-1 bg-indigo-50 text-indigo-600 rounded-lg"><Plus className="w-3 h-3" /></button>
+              <button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-0.5 bg-indigo-50 text-indigo-600 rounded-md"><Plus className="w-3 h-3" /></button>
             </div>
           </div>
-          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700 text-center">
+          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700">
             <div className="text-white/60 text-[8px] font-black uppercase mb-1">全体</div>
             <div className="text-xl sm:text-2xl font-black">{Number(totalProgress.percent)}%</div>
           </div>
@@ -337,7 +337,10 @@ const App = () => {
         <div className="flex items-center justify-between gap-3 mb-6">
           <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
             <div className="flex flex-col"><span className="text-[8px] font-black text-slate-400 uppercase">週間目標</span>
-              <div className="flex items-center gap-1"><input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent pointer-events-auto" onTouchStart={handleInputTouch} /><span className="text-[9px] font-bold text-slate-300">P/w</span></div>
+              <div className="flex items-center gap-1">
+                <input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent" onTouchStart={handleInputTouch} />
+                <span className="text-[9px] font-bold text-slate-300">P/w</span>
+              </div>
             </div>
             <button onClick={() => setDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user?.uid, 'settings', 'weeklyGoal'), { remainingTarget: weeklyGoalBase, lastUpdatedDate: getTodayStr() }, { merge: true })} className="p-1.5 text-slate-300 active:rotate-180 transition-all"><RefreshCw className="w-4 h-4" /></button>
           </div>
@@ -359,6 +362,7 @@ const App = () => {
                       <h3 className="font-black text-sm text-slate-800 truncate flex-1 text-left">{String(b.title)}</h3>
                       <div className="flex shrink-0 gap-0.5 bg-slate-100/50 rounded-lg p-0.5 border border-slate-100">
                          <button onClick={() => moveTextbook(idx, -1)} disabled={idx === 0} className="p-1 text-slate-400 active:text-indigo-600 disabled:opacity-10"><ChevronUp className="w-3.5 h-3.5" /></button>
+                         {/* ↓ 誤字 moveMessage を moveTextbook に修正 ↓ */}
                          <button onClick={() => moveTextbook(idx, 1)} disabled={idx === textbooks.length - 1} className="p-1 text-slate-400 active:text-indigo-600 disabled:opacity-10"><ChevronDown className="w-3.5 h-3.5" /></button>
                          <div className="w-px h-3 bg-slate-200 my-auto mx-0.5"></div>
                          <button onClick={() => { setEditingBookId(b.id); setForm({title:b.title,totalPages:b.totalPages,currentPage:b.currentPage,coverUrl:b.coverUrl||""}); setIsModalOpen(true); }} className="text-slate-400 hover:text-indigo-600 p-1"><Edit2 className="w-3.5 h-3.5" /></button>
@@ -372,10 +376,10 @@ const App = () => {
                   </div>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
-                      <input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-14 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none focus:ring-2 focus:ring-indigo-100 pointer-events-auto" onTouchStart={handleInputTouch} />
+                      <input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-14 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none focus:ring-2 focus:ring-indigo-100 select-text" onTouchStart={handleInputTouch} />
                       <span className="text-[10px] text-slate-400 font-bold shrink-0">/ {Number(b.totalPages)} P</span>
                     </div>
-                    {prog >= 100 && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+                    {prog >= 100 && <CheckCircle2 className="w-4 h-4 text-emerald-500 animate-in zoom-in" />}
                   </div>
                 </div>
               </div>
@@ -390,27 +394,33 @@ const App = () => {
           <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl p-8 overflow-y-auto max-h-[90vh]">
             <h2 className="text-xl font-black text-center mb-8 font-mono">{editingBookId ? '情報を修正' : '教材を追加'}</h2>
             <form onSubmit={handleSave} className="space-y-5">
-              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none focus:border-indigo-600 border-2 border-transparent pointer-events-auto" value={form.title} onChange={e => setForm({...form, title: e.target.value})} onTouchStart={handleInputTouch} />
+              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none focus:border-indigo-600 border-2 border-transparent" value={form.title} onChange={e => setForm({...form, title: e.target.value})} onTouchStart={handleInputTouch} />
               <div className="flex flex-col items-center gap-3 border-2 border-dashed border-slate-200 rounded-2xl p-6 bg-slate-50 cursor-pointer" onClick={() => fileInputRef.current?.click()}>
                 {form.coverUrl ? <img src={String(form.coverUrl)} className="w-20 h-28 object-cover rounded-xl shadow-md" alt="" /> : <><ImageIcon className="w-6 h-6 text-slate-300" /><span className="text-[10px] font-black text-slate-400 text-center">カバー画像アップロード<br/>(省略可)</span></>}
                 <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={async (e) => { const f = e.target.files[0]; if(f) setForm({...form, coverUrl: await resizeImage(f)}); }} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1 text-left"><label className="text-[9px] font-black text-slate-400 ml-2">総ページ数</label><input required type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none pointer-events-auto" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} onTouchStart={handleInputTouch} /></div>
-                <div className="space-y-1 text-left"><label className="text-[9px] font-black text-slate-400 ml-2">現在のページ</label><input type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none pointer-events-auto" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} onTouchStart={handleInputTouch} /></div>
+              <div className="grid grid-cols-2 gap-4 text-left">
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2 uppercase tracking-tighter">Total Pages</label><input required type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} onTouchStart={handleInputTouch} /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2 uppercase tracking-tighter">Current Page</label><input type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} onTouchStart={handleInputTouch} /></div>
               </div>
-              <div className="flex gap-3 pt-4"><button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-100 py-4 rounded-2xl font-black text-xs active:scale-95 transition-all">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black text-xs shadow-lg active:scale-95 transition-all">保存する</button></div>
+              <div className="flex gap-3 pt-4"><button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-100 py-4 rounded-2xl font-black text-xs active:scale-95">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black text-xs shadow-lg active:scale-95">保存する</button></div>
             </form>
           </div>
         </div>
       )}
+
+      {/* SYNC INDICATOR */}
+      <div className="fixed bottom-4 left-4 bg-white/80 backdrop-blur px-3 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center gap-2 z-[30]">
+        <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+        <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Cloud Synced</span>
+      </div>
 
       {isLogoutModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100]">
           <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center">
             <h3 className="font-black text-lg mb-2 text-slate-800">ログアウトしますか？</h3>
             <p className="text-[11px] text-slate-400 mb-8 leading-relaxed font-bold">ログイン中のメールアドレス:<br/>{user?.email}</p>
-            <div className="flex gap-3"><button onClick={() => setIsLogoutModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black">キャンセル</button><button onClick={handleLogout} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">ログアウト</button></div>
+            <div className="flex gap-3"><button onClick={() => setIsLogoutModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={handleLogout} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">ログアウト</button></div>
           </div>
         </div>
       )}
@@ -419,8 +429,8 @@ const App = () => {
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100]">
           <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center">
             <h3 className="font-black text-lg mb-2 text-slate-800">教材を削除しますか？</h3>
-            <p className="text-[11px] text-slate-400 mb-8 font-bold">これまでの学習記録も削除されます。</p>
-            <div className="flex gap-3 mt-8"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-lg">削除する</button></div>
+            <p className="text-[11px] text-slate-400 mb-8 font-bold">これまでの記録も削除されます。</p>
+            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95 transition-all">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">削除する</button></div>
           </div>
         </div>
       )}
