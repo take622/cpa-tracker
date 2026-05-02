@@ -7,13 +7,24 @@ import {
   signOut 
 } from 'firebase/auth';
 import { 
-  getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, 
-  deleteDoc, serverTimestamp, writeBatch, increment, getDocs 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  onSnapshot, 
+  updateDoc, 
+  addDoc, 
+  deleteDoc, 
+  serverTimestamp, 
+  writeBatch, 
+  increment, 
+  getDocs,
+  getDoc
 } from 'firebase/firestore';
 import { 
   Book, Plus, Trash2, Edit2, CheckCircle2, Loader2, 
   GraduationCap, RefreshCw, 
-  Image as ImageIcon, Heart, ChevronUp, ChevronDown, LogOut, Database, AlertTriangle
+  Image as ImageIcon, Heart, ChevronUp, ChevronDown, LogOut, Database, AlertTriangle, UserCheck
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
@@ -31,8 +42,11 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 【同期の生命線】PC・スマホで1ミリもズレないように固定IDを完全ハードコード
-const ABSOLUTE_MASTER_ID = "CPA_TRACKER_ULTRASYNC_V200";
+/**
+ * 【同期の最重要設定：絶対固定】
+ * これにより PC(Gemini) と スマホ(Vercel) が物理的に同じ場所を共有します。
+ */
+const MASTER_STORAGE_ID = "CPA_TRACKER_MASTER_SYNC_V300";
 
 const MASCOT_MESSAGES = [
   "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
@@ -82,7 +96,7 @@ const App = () => {
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [isAuthProcessing, setIsAuthProcessing] = useState(false);
-  const [syncError, setSyncError] = useState(null); // 同期エラー表示用
+  const [syncError, setSyncError] = useState(null);
 
   const [textbooks, setTextbooks] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -122,14 +136,15 @@ const App = () => {
     return { percent: tot > 0 ? Math.round((cur / tot) * 100) : 0, current: cur, total: tot };
   }, [textbooks]);
 
-  // 【最重要：リアルタイム同期】
+  // 【デバイス間リアルタイム同期の核】
   useEffect(() => {
     if (!user) return;
     setSyncError(null);
     const todayStr = getTodayStr();
     setCurrentDate(todayStr);
 
-    const goalRef = doc(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'settings', 'weeklyGoal');
+    // 同期パスを厳格に固定
+    const goalRef = doc(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'settings', 'weeklyGoal');
     const unsubGoal = onSnapshot(goalRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
@@ -138,18 +153,18 @@ const App = () => {
       } else {
         setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: todayStr });
       }
-    }, (err) => setSyncError("目標の同期に失敗: " + err.message));
+    }, (err) => setSyncError("Sync Failed: " + err.message));
 
-    const todayRef = doc(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'dailyLogs', todayStr);
+    const todayRef = doc(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'dailyLogs', todayStr);
     const unsubToday = onSnapshot(todayRef, (snap) => {
       setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
-    }, (err) => setSyncError("今日の記録の同期に失敗: " + err.message));
+    });
 
-    const booksCol = collection(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'textbooks');
+    const booksCol = collection(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setTextbooks(data.sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
-    }, (err) => setSyncError("教材リストの同期に失敗: " + err.message));
+    });
 
     return () => { unsubGoal(); unsubToday(); unsubBooks(); };
   }, [user]);
@@ -161,13 +176,14 @@ const App = () => {
     try {
       await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
     } catch (err) {
-      setAuthError("認証に失敗しました。");
+      setAuthError("認証に失敗しました。メアドとパスワードを確認してください。");
     } finally { setIsAuthProcessing(false); }
   };
 
   const handleLogout = async () => {
     await signOut(auth);
     setUser(null);
+    setTextbooks([]);
     setIsLogoutModalOpen(false);
   };
 
@@ -180,9 +196,9 @@ const App = () => {
     if (dlt === 0) return;
 
     const batch = writeBatch(db);
-    batch.update(doc(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
-    batch.set(doc(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
-    batch.update(doc(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: currentDate });
+    batch.update(doc(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
+    batch.set(doc(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
+    batch.update(doc(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: currentDate });
     await batch.commit();
   };
 
@@ -191,8 +207,8 @@ const App = () => {
     const targetIndex = index + direction;
     if (targetIndex < 0 || targetIndex >= textbooks.length) return;
     const batch = writeBatch(db);
-    batch.update(doc(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
-    batch.update(doc(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
+    batch.update(doc(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
+    batch.update(doc(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
     await batch.commit();
   };
 
@@ -203,12 +219,12 @@ const App = () => {
     const tid = editingBookId;
     setIsModalOpen(false); setEditingBookId(null); setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
     try {
-      if (tid) await updateDoc(doc(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'textbooks', tid), bookData);
-      else await addDoc(collection(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'textbooks'), bookData);
-    } catch (err) { setSyncError("保存エラー: " + err.message); }
+      if (tid) await updateDoc(doc(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'textbooks', tid), bookData);
+      else await addDoc(collection(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'textbooks'), bookData);
+    } catch (err) { setSyncError("保存に失敗しました: " + err.message); }
   };
 
-  if (loading) return <div className="min-h-screen bg-white flex items-center justify-center font-sans"><Loader2 className="w-8 h-8 animate-spin text-indigo-400" /></div>;
+  if (loading) return <div className="min-h-screen bg-white flex items-center justify-center font-sans"><Loader2 className="w-8 h-8 animate-spin text-indigo-500" /></div>;
 
   if (!user) {
     return (
@@ -216,13 +232,13 @@ const App = () => {
         <style dangerouslySetInnerHTML={{ __html: `input { font-size: 16px !important; }` }} />
         <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl p-8 text-center border border-slate-200">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
-          <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter">CPA Tracker</h1>
-          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">Permanent Master Sync</p>
+          <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter text-center">CPA Tracker</h1>
+          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">Cloud Sync Study System</p>
           <form onSubmit={handleAuth} className="space-y-4">
-            <div className="text-left"><label className="text-[9px] font-black text-slate-400 uppercase ml-1">Email</label><input required type="email" placeholder="example@cpa.com" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 text-base font-bold outline-none block" value={authEmail} onChange={e => setAuthEmail(e.target.value)} /></div>
+            <div className="text-left"><label className="text-[9px] font-black text-slate-400 uppercase ml-1">Email Address</label><input required type="email" placeholder="example@cpa.com" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 text-base font-bold outline-none block" value={authEmail} onChange={e => setAuthEmail(e.target.value)} /></div>
             <div className="text-left"><label className="text-[9px] font-black text-slate-400 uppercase ml-1">Password</label><input required type="password" placeholder="••••••••" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 text-base font-bold outline-none block" value={authPassword} onChange={e => setAuthPassword(e.target.value)} /></div>
             {authError && <div className="text-red-500 text-[10px] font-bold py-1">{authError}</div>}
-            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all mt-4">{isAuthProcessing ? '接続中...' : 'Login'}</button>
+            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all mt-4">{isAuthProcessing ? 'Connecting...' : 'Login'}</button>
           </form>
         </div>
       </div>
@@ -237,7 +253,7 @@ const App = () => {
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           <div className="flex-1 bg-indigo-900 p-2 rounded-xl border border-indigo-700 flex items-start gap-2">
             <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0">
-               <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Support" className="w-6 h-6" />
+               <img src="https://api.dicebear.com/7.x/bottts/svg?seed=StudySupport" className="w-6 h-6" />
             </div>
             <p className="text-[10px] font-bold text-white leading-tight">{MASCOT_MESSAGES[Math.floor(time.getMinutes() / 4) % MASCOT_MESSAGES.length]}</p>
           </div>
@@ -282,10 +298,10 @@ const App = () => {
                   <div className="flex justify-between items-start mb-1 gap-1">
                     <h3 className="font-black text-sm text-slate-800 truncate flex-1">{b.title}</h3>
                     <div className="flex shrink-0 gap-1">
-                       <button onClick={() => moveTextbook(idx, -1)} disabled={idx === 0} className="p-1 text-slate-400 disabled:opacity-10"><ChevronUp className="w-4 h-4" /></button>
-                       <button onClick={() => moveTextbook(idx, 1)} disabled={idx === textbooks.length - 1} className="p-1 text-slate-400 disabled:opacity-10"><ChevronDown className="w-4 h-4" /></button>
-                       <button onClick={() => { setEditingBookId(b.id); setForm({title:b.title,totalPages:b.totalPages,currentPage:b.currentPage,coverUrl:b.coverUrl||""}); setIsModalOpen(true); }} className="text-slate-400 p-1"><Edit2 className="w-4 h-4" /></button>
-                       <button onClick={() => setDeleteConfirmId(b.id)} className="text-slate-400 p-1"><Trash2 className="w-4 h-4" /></button>
+                       <button onClick={() => moveTextbook(idx, -1)} disabled={idx === 0} className="p-1 text-slate-400 disabled:opacity-10 active:scale-90"><ChevronUp className="w-4 h-4" /></button>
+                       <button onClick={() => moveTextbook(idx, 1)} disabled={idx === textbooks.length - 1} className="p-1 text-slate-400 disabled:opacity-10 active:scale-90"><ChevronDown className="w-4 h-4" /></button>
+                       <button onClick={() => { setEditingBookId(b.id); setForm({title:b.title,totalPages:b.totalPages,currentPage:b.currentPage,coverUrl:b.coverUrl||""}); setIsModalOpen(true); }} className="text-slate-400 p-1 active:scale-90"><Edit2 className="w-4 h-4" /></button>
+                       <button onClick={() => setDeleteConfirmId(b.id)} className="text-slate-400 p-1 active:scale-90"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5"><input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-14 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none" /><span className="text-[10px] text-slate-400 font-bold shrink-0">/ {b.totalPages} P</span></div>
@@ -296,15 +312,15 @@ const App = () => {
         </div>
       </main>
 
-      {/* SYNC INDICATOR & DEBUG INFO */}
+      {/* SYNC INDICATOR & UID DISPLAY */}
       <div className="fixed bottom-4 left-4 right-4 flex flex-col gap-1 pointer-events-none z-[100]">
         <div className="flex items-center justify-between">
           <div className="bg-white/90 px-3 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center gap-2">
-            <Database className="w-3.5 h-3.5 text-indigo-600" />
-            <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Master Cloud Connected</span>
+            <Database className="w-3 h-3 text-indigo-600" />
+            <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Master Cloud Sync Active</span>
           </div>
           <div className="bg-white/90 px-3 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center gap-1.5 text-[7px] font-mono text-slate-500">
-             UID:{user?.uid.slice(-12).toUpperCase()}
+             <UserCheck className="w-2.5 h-2.5" /> UID:{user?.uid.slice(-12).toUpperCase()}
           </div>
         </div>
         {syncError && (
@@ -320,14 +336,14 @@ const App = () => {
           <div className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl p-8 overflow-y-auto max-h-[90vh]">
             <h2 className="text-xl font-black text-center mb-8 font-mono">{editingBookId ? '修正' : '追加'}</h2>
             <form onSubmit={handleSave} className="space-y-5">
-              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-xl px-4 py-4 font-bold text-base outline-none border border-slate-200" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
+              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-xl px-4 py-4 font-bold text-base outline-none border border-slate-200 select-text" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
               <div className="flex flex-col items-center gap-3 border-2 border-dashed border-slate-200 rounded-2xl p-4 bg-slate-50 cursor-pointer" onClick={() => fileInputRef.current?.click()}>
                 {form.coverUrl ? <img src={String(form.coverUrl)} className="w-20 h-28 object-cover rounded-xl shadow-md" /> : <ImageIcon className="w-6 h-6 text-slate-300" />}
                 <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={async (e) => { if(e.target.files[0]) setForm({...form, coverUrl: await resizeImage(e.target.files[0])}); }} />
               </div>
               <div className="grid grid-cols-2 gap-4 text-left">
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase">Total</label><input required type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold text-base outline-none border border-slate-200" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase">Current</label><input type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold text-base outline-none border border-slate-200" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase">Total</label><input required type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold text-base outline-none border border-slate-200 select-text" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase">Current</label><input type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold text-base outline-none border border-slate-200 select-text" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
               </div>
               <div className="flex gap-3 pt-4"><button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-100 py-4 rounded-xl font-black text-xs active:scale-95">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-xl font-black text-xs shadow-lg active:scale-95">保存</button></div>
             </form>
@@ -348,7 +364,7 @@ const App = () => {
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
           <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
             <h3 className="font-black text-lg mb-2 text-slate-800">削除しますか？</h3>
-            <div className="flex gap-3 mt-8"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { await deleteDoc(doc(db, 'artifacts', ABSOLUTE_MASTER_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); }} className="flex-1 py-4 bg-red-500 text-white rounded-xl text-[11px] font-black shadow-md active:scale-95">削除</button></div>
+            <div className="flex gap-3 mt-8"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { await deleteDoc(doc(db, 'artifacts', MASTER_STORAGE_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); }} className="flex-1 py-4 bg-red-500 text-white rounded-xl text-[11px] font-black shadow-md active:scale-95">削除</button></div>
           </div>
         </div>
       )}
