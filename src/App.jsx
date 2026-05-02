@@ -116,11 +116,11 @@ const Mascot = () => {
   const msg = shuffledIndices.length > 0 ? MASCOT_MESSAGES[shuffledIndices[currentIndex]] : "...";
 
   return (
-    <div className="flex items-start gap-2 bg-indigo-900 p-2.5 rounded-xl border border-indigo-700 cursor-pointer hover:bg-indigo-800 transition-all flex-1 min-w-0" onClick={nextMessage}>
+    <div className="flex items-start gap-2 bg-indigo-900 p-2.5 rounded-xl border border-indigo-700 cursor-pointer hover:bg-indigo-800 transition-all flex-1 min-w-0 shadow-inner" onClick={nextMessage}>
       <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0">
-        <img src="https://api.dicebear.com/7.x/bottts/svg?seed=CPA-Cheer-V2&backgroundColor=6366f1" alt="Mascot" className="w-6 h-6" />
+        <img src="https://api.dicebear.com/7.x/bottts/svg?seed=CPA-Cheer-Final&backgroundColor=6366f1" alt="Mascot" className="w-6 h-6" />
       </div>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 text-left">
         <div className="flex items-center gap-1 mb-1">
           <Heart className="w-2 h-2 text-rose-400 fill-rose-400" />
           <span className="text-[7px] font-black text-indigo-300 uppercase tracking-tighter">Support Message</span>
@@ -188,7 +188,6 @@ const App = () => {
     const todayStr = getTodayStr();
     setCurrentDate(todayStr);
 
-    // 週間ノルマ
     const goalRef = doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'settings', 'weeklyGoal');
     const unsubGoal = onSnapshot(goalRef, (snap) => {
       if (snap.exists()) {
@@ -203,13 +202,11 @@ const App = () => {
       }
     });
 
-    // 今日進捗
     const todayRef = doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'dailyLogs', todayStr);
     const unsubToday = onSnapshot(todayRef, (snap) => {
       setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
     });
 
-    // 教材リスト
     const booksCol = collection(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -228,7 +225,7 @@ const App = () => {
       if (isLoginMode) await signInWithEmailAndPassword(auth, authEmail, authPassword);
       else await createUserWithEmailAndPassword(auth, authEmail, authPassword);
     } catch (err) {
-      setAuthError("認証に失敗。入力内容を確認し、新規登録（Sign Up）も試してください。");
+      setAuthError("認証に失敗しました。メール・パスワードを確認してください。");
     } finally { setIsAuthProcessing(false); }
   };
 
@@ -295,6 +292,11 @@ const App = () => {
   if (!user && !loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
+        {/* スマホの入力制限を解除するためのスタイルタグ */}
+        <style dangerouslySetInnerHTML={{ __html: `
+          input { -webkit-user-select: text !important; user-select: text !important; }
+        ` }} />
+        
         <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl p-10 text-center relative z-50">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
           <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter">CPA Tracker</h1>
@@ -305,7 +307,7 @@ const App = () => {
               <label htmlFor="auth-email" className="text-[9px] font-black text-slate-400 uppercase ml-2">Email Address</label>
               <input 
                 required type="email" id="auth-email" autoComplete="email" placeholder="メールアドレス" 
-                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none" 
+                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none block" 
                 value={authEmail} onChange={e => setAuthEmail(e.target.value)}
               />
             </div>
@@ -313,12 +315,12 @@ const App = () => {
               <label htmlFor="auth-password" className="text-[9px] font-black text-slate-400 uppercase ml-2">Password</label>
               <input 
                 required type="password" id="auth-password" autoComplete="current-password" placeholder="パスワード" 
-                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none" 
+                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none block" 
                 value={authPassword} onChange={e => setAuthPassword(e.target.value)}
               />
             </div>
             {authError && <div className="text-red-500 text-[10px] font-bold px-2">{authError}</div>}
-            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-2xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all">{isAuthProcessing ? 'Processing...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
+            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-2xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all mt-4">{isAuthProcessing ? 'Processing...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
           </form>
           <button type="button" onClick={() => { setIsLoginMode(!isLoginMode); setAuthError(""); }} className="mt-8 text-[11px] font-black text-indigo-600 uppercase tracking-wider">{isLoginMode ? 'New here? Sign Up' : 'Already have an account?'}</button>
         </div>
@@ -330,17 +332,21 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans overflow-x-hidden">
+      {/* スマホの入力制限を解除するためのスタイルタグ */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        input { -webkit-user-select: text !important; user-select: text !important; }
+      ` }} />
       
-      {/* HEADER: 時計と日付・曜日表示 */}
+      {/* HEADER: 時計と日付・曜日表示を復元 */}
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 px-3 py-2 shadow-sm">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           <Mascot />
           <div className="flex items-center gap-2">
             <div className="flex flex-col items-end shrink-0 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shadow-inner">
-               <div className="text-[11px] font-black text-slate-800 font-mono tracking-tighter leading-none">
+               <div className="text-[11px] font-black text-slate-800 font-mono tracking-tighter leading-none mb-1">
                  {time.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                </div>
-               <div className="text-[8px] font-black text-slate-400 mt-1 leading-none">
+               <div className="text-[8px] font-black text-slate-400 leading-none">
                  {currentDate.replace(/-/g, '/')}({getDayName(currentDate)})
                </div>
             </div>
@@ -360,7 +366,7 @@ const App = () => {
             <div className="text-[8px] font-black text-indigo-600 uppercase tracking-widest mb-1 text-nowrap">今日進捗</div>
             <div className="flex items-center justify-between">
               <span className="text-xl sm:text-2xl font-black text-slate-800">{Number(todayStudied)}P</span>
-              <button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg active:scale-90"><Plus className="w-3 h-3" /></button>
+              <button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg active:scale-90 transition-transform"><Plus className="w-3 h-3" /></button>
             </div>
           </div>
           <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700">
@@ -373,7 +379,10 @@ const App = () => {
         <div className="flex items-center justify-between gap-3 mb-6">
           <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
             <div className="flex flex-col"><span className="text-[8px] font-black text-slate-400 uppercase">週間目標</span>
-              <div className="flex items-center gap-1"><input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent" /><span className="text-[9px] font-bold text-slate-300">P/w</span></div>
+              <div className="flex items-center gap-1">
+                <input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent" />
+                <span className="text-[9px] font-bold text-slate-300">P/w</span>
+              </div>
             </div>
             <button onClick={() => setDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user?.uid, 'settings', 'weeklyGoal'), { remainingTarget: weeklyGoalBase, lastUpdatedDate: getTodayStr() }, { merge: true })} className="p-1.5 text-slate-300 active:rotate-180 transition-all"><RefreshCw className="w-4 h-4" /></button>
           </div>
@@ -392,7 +401,7 @@ const App = () => {
                 <div className="p-4 flex-grow flex flex-col justify-between min-w-0">
                   <div>
                     <div className="flex justify-between items-start mb-1 gap-1">
-                      <h3 className="font-black text-sm text-slate-800 truncate flex-1">{String(b.title)}</h3>
+                      <h3 className="font-black text-sm text-slate-800 truncate flex-1 text-left">{String(b.title)}</h3>
                       <div className="flex shrink-0 gap-0.5 bg-slate-100/50 rounded-lg p-0.5 border border-slate-100">
                          <button onClick={() => moveTextbook(idx, -1)} disabled={idx === 0} className="p-1 text-slate-400 disabled:opacity-10 active:text-indigo-600"><ChevronUp className="w-3.5 h-3.5" /></button>
                          <button onClick={() => moveTextbook(idx, 1)} disabled={idx === textbooks.length - 1} className="p-1 text-slate-400 disabled:opacity-10 active:text-indigo-600"><ChevronDown className="w-3.5 h-3.5" /></button>
@@ -432,8 +441,8 @@ const App = () => {
                 <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={async (e) => { const file = e.target.files[0]; if(file) setForm({...form, coverUrl: await resizeImage(file)}); }} />
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2">総ページ数</label><input required type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2">現在のページ</label><input type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
+                <div className="space-y-1 text-left"><label className="text-[9px] font-black text-slate-400 ml-2">総ページ数</label><input required type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
+                <div className="space-y-1 text-left"><label className="text-[9px] font-black text-slate-400 ml-2">現在のページ</label><input type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
               </div>
               <div className="flex gap-3 pt-4"><button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-100 py-4 rounded-2xl font-black text-xs active:scale-95 transition-all">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black text-xs shadow-lg active:scale-95 transition-all">保存する</button></div>
             </form>
@@ -453,7 +462,7 @@ const App = () => {
 
       {deleteConfirmId && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100]">
-          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center">
+          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center animate-in zoom-in-95 duration-200">
             <h3 className="font-black text-lg mb-2 text-slate-800">教材を削除しますか？</h3>
             <p className="text-[11px] text-slate-400 mb-8 font-bold text-balance">これまでの学習記録も削除されます。</p>
             <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95 transition-all">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">削除する</button></div>
