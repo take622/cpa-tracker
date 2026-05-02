@@ -34,7 +34,7 @@ const db = getFirestore(app);
 
 const STABLE_STORAGE_ID = "cpa_tracker_final_storage_fixed";
 
-// --- Constants (軽量化のためコンポーネント外に配置) ---
+// --- 固定データ (コンポーネント外に配置してメモリ節約) ---
 const MASCOT_MESSAGES = [
   "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
   "休憩も大切な戦略の一つ。リフレッシュして次の1ページへ進みましょう！",
@@ -90,7 +90,7 @@ const resizeImage = (file) => {
   });
 };
 
-// --- Sub Components ---
+// --- サブコンポーネント ---
 
 const Mascot = () => {
   const [shuffledIndices, setShuffledIndices] = useState([]);
@@ -110,7 +110,7 @@ const Mascot = () => {
   };
 
   useEffect(() => {
-    const t = setInterval(nextMessage, 600000); 
+    const t = setInterval(nextMessage, 600000); // 10分おき
     return () => clearInterval(t);
   }, []);
 
@@ -132,7 +132,7 @@ const Mascot = () => {
   );
 };
 
-// --- Main App Component ---
+// --- メインコンポーネント ---
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -159,13 +159,11 @@ const App = () => {
   const fileInputRef = useRef(null);
   const [form, setForm] = useState({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
 
-  // 1秒ごとの時計更新
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // ログイン状態監視
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
@@ -174,7 +172,6 @@ const App = () => {
     return () => unsub();
   }, []);
 
-  // 進捗計算のメモ化（再計算の重さを軽減）
   const totalProgress = useMemo(() => {
     if (textbooks.length === 0) return { percent: 0, current: 0, total: 0 };
     const cur = textbooks.reduce((s, b) => s + (Number(b.currentPage) || 0), 0);
@@ -182,14 +179,11 @@ const App = () => {
     return { percent: tot > 0 ? Math.round((cur / tot) * 100) : 0, current: cur, total: tot };
   }, [textbooks]);
 
-  // データ同期
   useEffect(() => {
     if (!user) return;
-
     const todayStr = getTodayStr();
     setCurrentDate(todayStr);
 
-    // 週間設定
     const goalRef = doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'settings', 'weeklyGoal');
     const unsubGoal = onSnapshot(goalRef, (snap) => {
       if (snap.exists()) {
@@ -205,13 +199,11 @@ const App = () => {
       }
     });
 
-    // 今日進捗
     const todayRef = doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'dailyLogs', todayStr);
     const unsubToday = onSnapshot(todayRef, (snap) => {
       setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
     });
 
-    // 教材リスト
     const booksCol = collection(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -221,7 +213,6 @@ const App = () => {
     return () => { unsubGoal(); unsubToday(); unsubBooks(); };
   }, [user]);
 
-  // 各種アクション
   const handleAuth = async (e) => {
     e.preventDefault();
     setAuthError("");
@@ -230,7 +221,7 @@ const App = () => {
       if (isLoginMode) await signInWithEmailAndPassword(auth, authEmail, authPassword);
       else await createUserWithEmailAndPassword(auth, authEmail, authPassword);
     } catch (err) {
-      setAuthError("認証に失敗。入力内容を確認してください。");
+      setAuthError("認証に失敗。正しいメール/パスワードを入力してください。");
     } finally { setIsAuthProcessing(false); }
   };
 
@@ -279,7 +270,6 @@ const App = () => {
     };
     const targetId = editingBookId;
 
-    // 即座にUIを閉じる
     setIsModalOpen(false); 
     setEditingBookId(null);
     setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
@@ -302,9 +292,36 @@ const App = () => {
           <div className="w-20 h-20 bg-indigo-600 rounded-3xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-10 h-10 text-white" /></div>
           <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter">CPA Tracker</h1>
           <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest leading-relaxed">Login to Sync Across Devices</p>
+          
           <form onSubmit={handleAuth} className="space-y-4 text-left">
-            <input required type="email" placeholder="メールアドレス" className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none transition-all" value={authEmail} onChange={e => setAuthEmail(e.target.value)}/>
-            <input required type="password" placeholder="パスワード" className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none transition-all" value={authPassword} onChange={e => setAuthPassword(e.target.value)}/>
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Email Address</label>
+              <input 
+                required 
+                type="email" 
+                name="email"
+                id="login-email"
+                autoComplete="email"
+                placeholder="メールアドレス" 
+                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none transition-all select-text" 
+                value={authEmail} 
+                onChange={e => setAuthEmail(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Password</label>
+              <input 
+                required 
+                type="password" 
+                name="password"
+                id="login-password"
+                autoComplete="current-password"
+                placeholder="パスワード" 
+                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none transition-all select-text" 
+                value={authPassword} 
+                onChange={e => setAuthPassword(e.target.value)}
+              />
+            </div>
             {authError && <div className="text-red-500 text-[10px] font-bold px-2">{authError}</div>}
             <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-2xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all">{isAuthProcessing ? '接続中...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
           </form>
@@ -317,7 +334,7 @@ const App = () => {
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-indigo-200" /></div>;
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans select-none overflow-x-hidden">
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans overflow-x-hidden">
       
       {/* HEADER */}
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 px-3 py-2 shadow-sm">
@@ -325,8 +342,12 @@ const App = () => {
           <Mascot />
           <div className="flex items-center gap-2">
             <div className="flex flex-col items-end shrink-0 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shadow-inner">
-               <div className="text-[11px] font-black text-slate-800 font-mono tracking-tighter leading-none">{time.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</div>
-               <div className="text-[8px] font-black text-slate-400 mt-1 leading-none">{currentDate.replace(/-/g, '/')}({getDayName(currentDate)})</div>
+               <div className="text-[11px] font-black text-slate-800 font-mono tracking-tighter leading-none">
+                 {time.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+               </div>
+               <div className="text-[8px] font-black text-slate-400 mt-1 leading-none">
+                 {currentDate.replace(/-/g, '/')}({getDayName(currentDate)})
+               </div>
             </div>
             <button onClick={() => setIsLogoutModalOpen(true)} className="p-2.5 bg-slate-100 text-slate-400 rounded-xl hover:bg-red-50 hover:text-red-500 transition-all active:scale-90"><LogOut className="w-4 h-4" /></button>
           </div>
@@ -357,7 +378,7 @@ const App = () => {
         <div className="flex items-center justify-between gap-3 mb-6">
           <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
             <div className="flex flex-col"><span className="text-[8px] font-black text-slate-400 uppercase">週間目標</span>
-              <div className="flex items-center gap-1"><input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent" /><span className="text-[9px] font-bold text-slate-300">P/w</span></div>
+              <div className="flex items-center gap-1"><input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent select-text" /><span className="text-[9px] font-bold text-slate-300">P/w</span></div>
             </div>
             <button onClick={() => setDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user?.uid, 'settings', 'weeklyGoal'), { remainingTarget: weeklyGoalBase, lastUpdatedDate: getTodayStr() }, { merge: true })} className="p-1.5 text-slate-300 active:rotate-180 transition-all"><RefreshCw className="w-4 h-4" /></button>
           </div>
@@ -392,7 +413,7 @@ const App = () => {
                   </div>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
-                      <input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-14 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none focus:ring-2 focus:ring-indigo-100" />
+                      <input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-14 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none focus:ring-2 focus:ring-indigo-100 select-text" />
                       <span className="text-[10px] text-slate-400 font-bold shrink-0">/ {Number(b.totalPages)} P</span>
                     </div>
                     {prog >= 100 && <CheckCircle2 className="w-4 h-4 text-emerald-500 animate-in zoom-in" />}
@@ -410,14 +431,14 @@ const App = () => {
           <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl p-8 transform animate-in zoom-in-95 duration-300 overflow-y-auto max-h-[90vh]">
             <h2 className="text-xl font-black text-center mb-8 font-mono">{editingBookId ? '情報を修正' : '教材を追加'}</h2>
             <form onSubmit={handleSave} className="space-y-5">
-              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none focus:border-indigo-600 border-2 border-transparent" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
+              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none focus:border-indigo-600 border-2 border-transparent select-text" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
               <div className="flex flex-col items-center gap-3 border-2 border-dashed border-slate-200 rounded-2xl p-6 bg-slate-50 cursor-pointer" onClick={() => fileInputRef.current?.click()}>
                 {form.coverUrl ? <img src={String(form.coverUrl)} className="w-20 h-28 object-cover rounded-xl shadow-md" alt="" /> : <><ImageIcon className="w-6 h-6 text-slate-300" /><span className="text-[10px] font-black text-slate-400 text-center">カバー画像アップロード<br/>(省略可)</span></>}
                 <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={async (e) => { const file = e.target.files[0]; if(file) setForm({...form, coverUrl: await resizeImage(file)}); }} />
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2">総ページ数</label><input required type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2">現在のページ</label><input type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2">総ページ数</label><input required type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none select-text" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2">現在のページ</label><input type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none select-text" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
               </div>
               <div className="flex gap-3 pt-4"><button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-100 py-4 rounded-2xl font-black text-xs active:scale-95 transition-all">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black text-xs shadow-lg active:scale-95 transition-all">保存する</button></div>
             </form>
