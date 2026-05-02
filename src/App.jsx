@@ -14,7 +14,7 @@ import {
 import { 
   Book, Plus, Trash2, Edit2, CheckCircle2, Loader2, 
   GraduationCap, RefreshCw, 
-  Image as ImageIcon, Upload, Heart, ChevronUp, ChevronDown, LogOut, Mail, Lock, AlertCircle
+  Image as ImageIcon, Upload, Heart, ChevronUp, ChevronDown, LogOut, Mail, Lock, AlertCircle, User
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
@@ -32,10 +32,10 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 【同期の鍵】環境から提供されるアプリIDを優先して使用します
-const appId = typeof __app_id !== 'undefined' ? __app_id : "cpa_tracker_stable_final_v1";
+// 【重要】同期の鍵となるIDを完全に固定します。
+const STABLE_APP_ID = "cpa_universal_master_sync_v1";
 
-// --- 固定メッセージ ---
+// --- メッセージ ---
 const MASCOT_MESSAGES = [
   "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
   "休憩も大切な戦略の一つ。リフレッシュして次の1ページへ進みましょう！",
@@ -96,8 +96,8 @@ const Mascot = () => {
     return () => clearInterval(t);
   }, []);
   return (
-    <div className="flex items-start gap-2 bg-indigo-900 p-2.5 rounded-xl border border-indigo-700 cursor-pointer flex-1 min-w-0" onClick={() => setIndex(i => (i + 1) % MASCOT_MESSAGES.length)}>
-      <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0">
+    <div className="flex items-start gap-2 bg-indigo-900 p-2 rounded-xl border border-indigo-700 cursor-pointer flex-1 min-w-0" onClick={() => setIndex(i => (i + 1) % MASCOT_MESSAGES.length)}>
+      <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
         <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Support&backgroundColor=6366f1" alt="Mascot" className="w-6 h-6" />
       </div>
       <div className="min-w-0 flex-1 text-left">
@@ -137,13 +137,11 @@ const App = () => {
   const fileInputRef = useRef(null);
   const [form, setForm] = useState({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
 
-  // 1秒ごとの時計
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // 認証状態の監視
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
@@ -165,8 +163,8 @@ const App = () => {
     const todayStr = getTodayStr();
     setCurrentDate(todayStr);
 
-    // 1. 週間設定の同期 (Rule 1 Path)
-    const goalRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'weeklyGoal');
+    // 1. 週間設定の同期
+    const goalRef = doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'settings', 'weeklyGoal');
     const unsubGoal = onSnapshot(goalRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
@@ -181,32 +179,33 @@ const App = () => {
     }, (err) => console.error("Goal Sync Error:", err));
 
     // 2. 今日の勉強量の同期
-    const todayRef = doc(db, 'artifacts', appId, 'users', user.uid, 'dailyLogs', todayStr);
+    const todayRef = doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'dailyLogs', todayStr);
     const unsubToday = onSnapshot(todayRef, (snap) => {
       setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
     }, (err) => console.error("Today Log Sync Error:", err));
 
     // 3. 教材リストの同期
-    const booksCol = collection(db, 'artifacts', appId, 'users', user.uid, 'textbooks');
+    const booksCol = collection(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setTextbooks(data.sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
     }, (err) => console.error("Books Sync Error:", err));
 
     return () => { unsubGoal(); unsubToday(); unsubBooks(); };
-  }, [user, appId]);
+  }, [user]);
 
-  // 手動同期機能（念のため）
+  // 手動同期機能
   const forceSync = async () => {
     if (!user || isSyncing) return;
     setIsSyncing(true);
     try {
-      const booksCol = collection(db, 'artifacts', appId, 'users', user.uid, 'textbooks');
+      const todayStr = getTodayStr();
+      const booksCol = collection(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'textbooks');
       const bSnap = await getDocs(booksCol);
       const data = bSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       setTextbooks(data.sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
       
-      const goalRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'weeklyGoal');
+      const goalRef = doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'settings', 'weeklyGoal');
       const gSnap = await getDoc(goalRef);
       if (gSnap.exists()) {
         setRemainingWeeklyTarget(Number(gSnap.data().remainingTarget));
@@ -224,8 +223,8 @@ const App = () => {
     setAuthError("");
     setIsAuthProcessing(true);
     try {
-      if (isLoginMode) await signInWithEmailAndPassword(auth, authEmail, authPassword);
-      else await createUserWithEmailAndPassword(auth, authEmail, authPassword);
+      if (isLoginMode) await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
+      else await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword);
     } catch (err) {
       setAuthError("認証に失敗。正しいメール/パスワードを入力してください。");
     } finally { setIsAuthProcessing(false); }
@@ -247,9 +246,9 @@ const App = () => {
     if (dlt === 0) return;
 
     const batch = writeBatch(db);
-    batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
-    batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
-    batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: currentDate });
+    batch.update(doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
+    batch.set(doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
+    batch.update(doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: currentDate });
     await batch.commit();
   };
 
@@ -258,8 +257,8 @@ const App = () => {
     const targetIndex = index + direction;
     if (targetIndex < 0 || targetIndex >= textbooks.length) return;
     const batch = writeBatch(db);
-    batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
-    batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
+    batch.update(doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
+    batch.update(doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
     await batch.commit();
   };
 
@@ -271,8 +270,8 @@ const App = () => {
     setIsModalOpen(false); setEditingBookId(null); setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
     const runSave = async () => {
       try {
-        if (tid) await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'textbooks', tid), bookData);
-        else await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'textbooks'), bookData);
+        if (tid) await updateDoc(doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'textbooks', tid), bookData);
+        else await addDoc(collection(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'textbooks'), bookData);
       } catch (err) { console.error(err); }
     };
     runSave();
@@ -287,12 +286,10 @@ const App = () => {
           body { -webkit-user-select: auto !important; user-select: auto !important; }
           input { font-size: 16px !important; pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
         ` }} />
-        
         <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl p-8 text-center border border-slate-200">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
           <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter text-center">CPA Tracker</h1>
           <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">Cloud Sync Hub</p>
-          
           <form onSubmit={handleAuth} className="space-y-4">
             <div className="text-left">
               <label className="text-[9px] font-black text-slate-400 uppercase ml-1">Email Address</label>
@@ -319,19 +316,10 @@ const App = () => {
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           <Mascot />
           <div className="flex items-center gap-2">
-            <button 
-              onClick={forceSync} 
-              className={`p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-slate-400 active:scale-90 transition-all ${isSyncing ? 'animate-spin text-indigo-600' : ''}`}
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
+            <button onClick={forceSync} className={`p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-slate-400 active:scale-90 transition-all ${isSyncing ? 'animate-spin text-indigo-600' : ''}`}><RefreshCw className="w-4 h-4" /></button>
             <div className="flex flex-col items-end shrink-0 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shadow-inner">
-               <div className="text-[11px] font-black text-slate-800 font-mono tracking-tighter leading-none mb-1">
-                 {time.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
-               </div>
-               <div className="text-[8px] font-black text-slate-400 leading-none">
-                 {currentDate.replace(/-/g, '/')}({getDayName(currentDate)})
-               </div>
+               <div className="text-[11px] font-black text-slate-800 font-mono tracking-tighter leading-none mb-1">{time.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</div>
+               <div className="text-[8px] font-black text-slate-400 leading-none">{currentDate.replace(/-/g, '/')}({getDayName(currentDate)})</div>
             </div>
             <button onClick={() => setIsLogoutModalOpen(true)} className="p-2.5 bg-slate-100 text-slate-400 rounded-xl active:scale-90"><LogOut className="w-4 h-4" /></button>
           </div>
@@ -340,32 +328,20 @@ const App = () => {
 
       <main className="max-w-5xl w-full mx-auto p-3 sm:p-4 flex-grow pb-24">
         <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 text-center">
-          <div className="bg-slate-900 text-white p-3 rounded-2xl shadow-lg border-b-4 border-slate-800">
-            <div className="text-[8px] font-black text-slate-400 uppercase mb-1">残ノルマ</div>
-            <div className="text-xl sm:text-2xl font-black truncate">{Number(remainingWeeklyTarget)}P</div>
-          </div>
+          <div className="bg-slate-900 text-white p-3 rounded-2xl shadow-lg border-b-4 border-slate-800"><div className="text-[8px] font-black text-slate-400 uppercase mb-1">残ノルマ</div><div className="text-xl sm:text-2xl font-black truncate">{Number(remainingWeeklyTarget)}P</div></div>
           <div className="bg-white border border-slate-100 p-3 rounded-2xl shadow-sm border-b-4 border-slate-50">
             <div className="text-[8px] font-black text-indigo-600 uppercase mb-1">今日進捗</div>
-            <div className="flex items-center justify-center gap-1">
-              <span className="text-xl sm:text-2xl font-black text-slate-800">{Number(todayStudied)}P</span>
-              <button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-0.5 bg-indigo-50 text-indigo-600 rounded-md active:scale-90"><Plus className="w-3 h-3" /></button>
-            </div>
+            <div className="flex items-center justify-center gap-1"><span className="text-xl sm:text-2xl font-black text-slate-800">{Number(todayStudied)}P</span><button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-0.5 bg-indigo-50 text-indigo-600 rounded-md active:scale-90"><Plus className="w-3 h-3" /></button></div>
           </div>
-          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700">
-            <div className="text-white/60 text-[8px] font-black uppercase mb-1">全体進捗</div>
-            <div className="text-xl sm:text-2xl font-black">{Number(totalProgress.percent)}%</div>
-          </div>
+          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700"><div className="text-white/60 text-[8px] font-black uppercase mb-1">全体進捗</div><div className="text-xl sm:text-2xl font-black">{Number(totalProgress.percent)}%</div></div>
         </div>
 
         <div className="flex items-center justify-between gap-3 mb-6">
           <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
             <div className="flex flex-col"><span className="text-[8px] font-black text-slate-400 uppercase">週間目標</span>
-              <div className="flex items-center gap-1">
-                <input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent" />
-                <span className="text-[9px] font-bold text-slate-300">P/w</span>
-              </div>
+              <div className="flex items-center gap-1"><input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent" /><span className="text-[9px] font-bold text-slate-300">P/w</span></div>
             </div>
-            <button onClick={() => setDoc(doc(db, 'artifacts', appId, 'users', user?.uid, 'settings', 'weeklyGoal'), { remainingTarget: weeklyGoalBase, lastUpdatedDate: getTodayStr() }, { merge: true })} className="p-1.5 text-slate-300 active:rotate-180 transition-all"><RefreshCw className="w-4 h-4" /></button>
+            <button onClick={() => setDoc(doc(db, 'artifacts', STABLE_APP_ID, 'users', user?.uid, 'settings', 'weeklyGoal'), { remainingTarget: weeklyGoalBase, lastUpdatedDate: getTodayStr() }, { merge: true })} className="p-1.5 text-slate-300 active:rotate-180 transition-all"><RefreshCw className="w-4 h-4" /></button>
           </div>
           <button onClick={() => { setEditingBookId(null); setForm({title:'',totalPages:'',currentPage:'',coverUrl:''}); setIsModalOpen(true); }} className="bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-lg active:scale-95 flex items-center gap-2 font-black text-xs text-nowrap"><Plus className="w-4 h-4" /> 教材追加</button>
         </div>
@@ -389,16 +365,10 @@ const App = () => {
                          <button onClick={() => setDeleteConfirmId(b.id)} className="text-slate-400 p-1 active:scale-90"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 mb-3">
-                       <div className="flex-grow bg-slate-100 h-2 rounded-full overflow-hidden"><div className={`h-full transition-all duration-700 ${prog >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`} style={{ width: `${prog}%` }} /></div>
-                       <span className="text-[10px] font-black text-slate-400 w-8 text-right shrink-0">{Number(prog)}%</span>
-                    </div>
+                    <div className="flex items-center gap-2 mb-3"><div className="flex-grow bg-slate-100 h-2 rounded-full overflow-hidden"><div className={`h-full transition-all duration-700 ${prog >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`} style={{ width: `${prog}%` }} /></div><span className="text-[10px] font-black text-slate-400 w-8 text-right shrink-0">{Number(prog)}%</span></div>
                   </div>
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-14 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none focus:ring-2 focus:ring-indigo-100 select-text" />
-                      <span className="text-[10px] text-slate-400 font-bold shrink-0">/ {Number(b.totalPages)} P</span>
-                    </div>
+                    <div className="flex items-center gap-1.5"><input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-14 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none focus:ring-2 focus:ring-indigo-100 select-text" /><span className="text-[10px] text-slate-400 font-bold shrink-0">/ {Number(b.totalPages)} P</span></div>
                     {prog >= 100 && <CheckCircle2 className="w-4 h-4 text-emerald-500 animate-in zoom-in" />}
                   </div>
                 </div>
@@ -408,11 +378,15 @@ const App = () => {
         </div>
       </main>
 
-      <div className="fixed bottom-4 left-4 bg-white/90 px-3 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center gap-2 z-10 pointer-events-none">
-        <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-amber-500 animate-bounce' : 'bg-emerald-500 animate-pulse'}`} />
-        <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest text-nowrap">
-          {isSyncing ? 'Syncing...' : 'Cloud Synced'}
-        </span>
+      <div className="fixed bottom-4 left-4 right-4 flex items-center justify-between z-10 pointer-events-none">
+        <div className="bg-white/90 px-3 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center gap-2">
+          <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-amber-500 animate-bounce' : 'bg-emerald-500 animate-pulse'}`} />
+          <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest text-nowrap">{isSyncing ? 'Syncing...' : 'Cloud Synced'}</span>
+        </div>
+        <div className="bg-slate-900/10 px-2 py-1 rounded-lg backdrop-blur flex items-center gap-1">
+          <User className="w-2.5 h-2.5 text-slate-400" />
+          <span className="text-[7px] font-bold text-slate-400 font-mono">UID: {user?.uid.slice(-6)}</span>
+        </div>
       </div>
 
       {isModalOpen && (
@@ -450,7 +424,7 @@ const App = () => {
           <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
             <h3 className="font-black text-lg mb-2 text-slate-800">教材を削除しますか？</h3>
             <p className="text-[11px] text-slate-400 mb-8 font-bold text-balance">これまでの学習記録も削除されます。</p>
-            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除する</button></div>
+            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', STABLE_APP_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除する</button></div>
           </div>
         </div>
       )}
