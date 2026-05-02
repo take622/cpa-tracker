@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
+// ※GitHubに反映する際は、この設定が正しいことを確認してください。
 const firebaseConfig = {
   apiKey: "AIzaSyBgPwP-30BuXvuydRe6NsYJInMVMlmaWsE",
   authDomain: "cpa-tracker-a0f14.firebaseapp.com",
@@ -32,10 +33,14 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 【同期の生命線】環境に依存せず、全デバイスで同じフォルダを参照するための固定ID
-const SYNC_APP_ID = "cpa_master_sync_v100";
+/**
+ * 【同期の最重要設定】
+ * 環境変数に頼らず、全デバイスでこの文字列を共通の「フォルダ名」として使用します。
+ * これにより PC(Gemini) と スマホ(Vercel) が同じデータベースを参照することを保証します。
+ */
+const GLOBAL_SYNC_ID = "cpa_global_master_sync_final";
 
-// --- メッセージ ---
+// --- 固定メッセージ ---
 const MASCOT_MESSAGES = [
   "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
   "休憩も大切な戦略の一つ。リフレッシュして次の1ページへ進みましょう！",
@@ -54,7 +59,7 @@ const MASCOT_MESSAGES = [
   "深呼吸を一回して。落ち着いて取り組めば、必ず解けるようになりますよ。"
 ];
 
-// --- Utils ---
+// --- Utilities ---
 const getTodayStr = () => new Date().toLocaleDateString('sv-SE'); 
 const getDayName = (dateStr) => {
   const days = ['日', '月', '火', '水', '木', '金', '土'];
@@ -133,7 +138,7 @@ const App = () => {
   const fileInputRef = useRef(null);
   const [form, setForm] = useState({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
 
-  // 1秒ごとの時計更新
+  // 時計更新
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
@@ -161,8 +166,8 @@ const App = () => {
     const todayStr = getTodayStr();
     setCurrentDate(todayStr);
 
-    // 1. 週間設定の同期 (SYNC_APP_IDでフォルダを固定)
-    const goalRef = doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'settings', 'weeklyGoal');
+    // 1. 週間設定の同期 (GLOBAL_SYNC_IDを使用して保存先を全デバイスで固定)
+    const goalRef = doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'settings', 'weeklyGoal');
     const unsubGoal = onSnapshot(goalRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
@@ -174,35 +179,34 @@ const App = () => {
       } else {
         setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: todayStr });
       }
-    });
+    }, (err) => console.error("Firestore Sync Error (Goal):", err));
 
     // 2. 今日の勉強量の同期
-    const todayRef = doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'dailyLogs', todayStr);
+    const todayRef = doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'dailyLogs', todayStr);
     const unsubToday = onSnapshot(todayRef, (snap) => {
       setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
-    });
+    }, (err) => console.error("Firestore Sync Error (Log):", err));
 
     // 3. 教材リストの同期
-    const booksCol = collection(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks');
+    const booksCol = collection(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setTextbooks(data.sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
-    });
+    }, (err) => console.error("Firestore Sync Error (Books):", err));
 
     return () => { unsubGoal(); unsubToday(); unsubBooks(); };
   }, [user]);
 
-  // 強制同期
+  // 手動同期 (force refresh)
   const forceSync = async () => {
     if (!user || isSyncing) return;
     setIsSyncing(true);
     try {
-      const booksCol = collection(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks');
+      const booksCol = collection(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'textbooks');
       const bSnap = await getDocs(booksCol);
-      const data = bSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setTextbooks(data.sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
+      setTextbooks(bSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
       
-      const goalRef = doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'settings', 'weeklyGoal');
+      const goalRef = doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'settings', 'weeklyGoal');
       const gSnap = await getDoc(goalRef);
       if (gSnap.exists()) {
         setRemainingWeeklyTarget(Number(gSnap.data().remainingTarget));
@@ -210,7 +214,7 @@ const App = () => {
       }
       setTimeout(() => setIsSyncing(false), 800);
     } catch (e) {
-      console.error(e);
+      console.error("Manual Sync Failed:", e);
       setIsSyncing(false);
     }
   };
@@ -223,7 +227,7 @@ const App = () => {
       if (isLoginMode) await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
       else await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword);
     } catch (err) {
-      setAuthError("認証に失敗しました。メール・パスワードを確認してください。");
+      setAuthError("認証に失敗しました。メールアドレスとパスワードを確認してください。");
     } finally { setIsAuthProcessing(false); }
   };
 
@@ -243,9 +247,9 @@ const App = () => {
     if (dlt === 0) return;
 
     const batch = writeBatch(db);
-    batch.update(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
-    batch.set(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
-    batch.update(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: currentDate });
+    batch.update(doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
+    batch.set(doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
+    batch.update(doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: currentDate });
     await batch.commit();
   };
 
@@ -254,8 +258,8 @@ const App = () => {
     const targetIndex = index + direction;
     if (targetIndex < 0 || targetIndex >= textbooks.length) return;
     const batch = writeBatch(db);
-    batch.update(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
-    batch.update(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
+    batch.update(doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
+    batch.update(doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
     await batch.commit();
   };
 
@@ -267,9 +271,9 @@ const App = () => {
     setIsModalOpen(false); setEditingBookId(null); setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
     const runSave = async () => {
       try {
-        if (tid) await updateDoc(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', tid), bookData);
-        else await addDoc(collection(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks'), bookData);
-      } catch (err) { console.error(err); }
+        if (tid) await updateDoc(doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'textbooks', tid), bookData);
+        else await addDoc(collection(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'textbooks'), bookData);
+      } catch (err) { console.error("Save Error:", err); }
     };
     runSave();
   };
@@ -287,7 +291,7 @@ const App = () => {
         <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl p-8 text-center border border-slate-200">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
           <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter text-center">CPA Tracker</h1>
-          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">Cloud Master Sync</p>
+          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">Device Sync Mastery</p>
           <form onSubmit={handleAuth} className="space-y-4">
             <div className="text-left">
               <label className="text-[9px] font-black text-slate-400 uppercase ml-1">Email</label>
@@ -340,7 +344,7 @@ const App = () => {
             <div className="flex flex-col"><span className="text-[8px] font-black text-slate-400 uppercase">週間目標</span>
               <div className="flex items-center gap-1"><input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent" /><span className="text-[9px] font-bold text-slate-300">P/w</span></div>
             </div>
-            <button onClick={() => setDoc(doc(db, 'artifacts', SYNC_APP_ID, 'users', user?.uid, 'settings', 'weeklyGoal'), { remainingTarget: weeklyGoalBase, lastUpdatedDate: getTodayStr() }, { merge: true })} className="p-1.5 text-slate-300 active:rotate-180 transition-all"><RefreshCw className="w-4 h-4" /></button>
+            <button onClick={() => setDoc(doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user?.uid, 'settings', 'weeklyGoal'), { remainingTarget: weeklyGoalBase, lastUpdatedDate: getTodayStr() }, { merge: true })} className="p-1.5 text-slate-300 active:rotate-180 transition-all"><RefreshCw className="w-4 h-4" /></button>
           </div>
           <button onClick={() => { setEditingBookId(null); setForm({title:'',totalPages:'',currentPage:'',coverUrl:''}); setIsModalOpen(true); }} className="bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-lg active:scale-95 flex items-center gap-2 font-black text-xs text-nowrap"><Plus className="w-4 h-4" /> 教材追加</button>
         </div>
@@ -377,14 +381,14 @@ const App = () => {
         </div>
       </main>
 
-      {/* SYNC STATUS */}
+      {/* SYNC STATUS: デバッグと安心のための表示 */}
       <div className="fixed bottom-4 left-4 right-4 flex items-center justify-between z-10 pointer-events-none">
         <div className="bg-white/90 px-3 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center gap-2">
           <Database className="w-3 h-3 text-indigo-600" />
-          <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest text-nowrap">Cloud Synced</span>
+          <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest text-nowrap">Cloud Master Sync</span>
         </div>
         <div className="bg-white/90 px-2 py-1 rounded-full border border-slate-100 shadow-sm flex items-center gap-1">
-          <span className="text-[7px] font-bold text-slate-400 font-mono">UID:{user?.uid.slice(-6)} | ID:MASTER_V100</span>
+          <span className="text-[7px] font-bold text-slate-400 font-mono">UID:{user?.uid.slice(-6)} | ID:MASTER_SYNC</span>
         </div>
       </div>
 
@@ -423,7 +427,7 @@ const App = () => {
           <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
             <h3 className="font-black text-lg mb-2 text-slate-800">教材を削除しますか？</h3>
             <p className="text-[11px] text-slate-400 mb-8 font-bold text-balance">これまでの学習記録も削除されます。</p>
-            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除する</button></div>
+            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', GLOBAL_SYNC_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除する</button></div>
           </div>
         </div>
       )}
