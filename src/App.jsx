@@ -34,7 +34,7 @@ const db = getFirestore(app);
 
 const STABLE_STORAGE_ID = "cpa_tracker_final_storage_fixed";
 
-// --- 固定データ (コンポーネント外に配置してメモリ節約) ---
+// --- 固定データ (メモリ節約のため外出し) ---
 const MASCOT_MESSAGES = [
   "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
   "休憩も大切な戦略の一つ。リフレッシュして次の1ページへ進みましょう！",
@@ -93,28 +93,16 @@ const resizeImage = (file) => {
 // --- サブコンポーネント ---
 
 const Mascot = () => {
-  const [shuffledIndices, setShuffledIndices] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-
-  useEffect(() => {
-    const indices = MASCOT_MESSAGES.map((_, i) => i);
-    for (let i = indices.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [indices[i], indices[j]] = [indices[j], indices[i]];
-    }
-    setShuffledIndices(indices);
-  }, []);
 
   const nextMessage = () => {
     setCurrentIndex((prev) => (prev + 1) % MASCOT_MESSAGES.length);
   };
 
   useEffect(() => {
-    const t = setInterval(nextMessage, 600000); // 10分おき
+    const t = setInterval(nextMessage, 600000); 
     return () => clearInterval(t);
   }, []);
-
-  const msg = shuffledIndices.length > 0 ? MASCOT_MESSAGES[shuffledIndices[currentIndex]] : "読み込み中...";
 
   return (
     <div className="flex items-start gap-2 bg-indigo-900 p-2.5 rounded-xl border border-indigo-700 cursor-pointer hover:bg-indigo-800 transition-all flex-1 min-w-0 shadow-inner" onClick={nextMessage}>
@@ -124,9 +112,9 @@ const Mascot = () => {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1 mb-1">
           <Heart className="w-2.5 h-2.5 text-rose-400 fill-rose-400" />
-          <span className="text-[8px] font-black text-indigo-300 uppercase tracking-tight">合格くんの励まし</span>
+          <span className="text-[8px] font-black text-indigo-300 uppercase tracking-tight text-nowrap">合格くんの励まし</span>
         </div>
-        <p className="text-[10px] font-bold text-white leading-normal break-words">{msg}</p>
+        <p className="text-[10px] font-bold text-white leading-normal break-words">{MASCOT_MESSAGES[currentIndex]}</p>
       </div>
     </div>
   );
@@ -159,11 +147,13 @@ const App = () => {
   const fileInputRef = useRef(null);
   const [form, setForm] = useState({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
 
+  // 1秒ごとの時計更新
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  // ログイン状態監視
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
@@ -172,6 +162,7 @@ const App = () => {
     return () => unsub();
   }, []);
 
+  // 進捗計算のメモ化
   const totalProgress = useMemo(() => {
     if (textbooks.length === 0) return { percent: 0, current: 0, total: 0 };
     const cur = textbooks.reduce((s, b) => s + (Number(b.currentPage) || 0), 0);
@@ -179,6 +170,7 @@ const App = () => {
     return { percent: tot > 0 ? Math.round((cur / tot) * 100) : 0, current: cur, total: tot };
   }, [textbooks]);
 
+  // データ同期
   useEffect(() => {
     if (!user) return;
     const todayStr = getTodayStr();
@@ -188,31 +180,26 @@ const App = () => {
     const unsubGoal = onSnapshot(goalRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
-        const lastUpdate = d.lastUpdatedDate || "";
-        if (getWeekNumber(todayStr) !== getWeekNumber(lastUpdate) && lastUpdate !== "") {
+        if (getWeekNumber(todayStr) !== getWeekNumber(d.lastUpdatedDate || "") && d.lastUpdatedDate) {
           updateDoc(goalRef, { remainingTarget: Number(d.baseTarget || 380), lastUpdatedDate: todayStr });
         }
         setRemainingWeeklyTarget(Number(d.remainingTarget ?? 380));
         setWeeklyGoalBase(Number(d.baseTarget ?? 380));
-      } else {
-        setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: todayStr });
-      }
+      } else setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: todayStr });
     });
 
     const todayRef = doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'dailyLogs', todayStr);
-    const unsubToday = onSnapshot(todayRef, (snap) => {
-      setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
-    });
+    const unsubToday = onSnapshot(todayRef, (snap) => setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0));
 
     const booksCol = collection(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setTextbooks(data.sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
+      setTextbooks(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
     });
 
     return () => { unsubGoal(); unsubToday(); unsubBooks(); };
   }, [user]);
 
+  // 各種アクション
   const handleAuth = async (e) => {
     e.preventDefault();
     setAuthError("");
@@ -221,7 +208,7 @@ const App = () => {
       if (isLoginMode) await signInWithEmailAndPassword(auth, authEmail, authPassword);
       else await createUserWithEmailAndPassword(auth, authEmail, authPassword);
     } catch (err) {
-      setAuthError("認証に失敗。正しいメール/パスワードを入力してください。");
+      setAuthError("認証に失敗しました。入力内容を確認してください。");
     } finally { setIsAuthProcessing(false); }
   };
 
@@ -260,66 +247,43 @@ const App = () => {
   const handleSave = (e) => {
     e.preventDefault(); 
     if (!user || !form.title) return;
-
-    const bookData = { 
-      ...form, 
-      totalPages: Number(form.totalPages), 
-      currentPage: Number(form.currentPage), 
-      updatedAt: serverTimestamp(), 
-      sortOrder: editingBookId ? (textbooks.find(t=>t.id===editingBookId)?.sortOrder || 0) : textbooks.length 
-    };
+    const bookData = { ...form, totalPages: Number(form.totalPages), currentPage: Number(form.currentPage), updatedAt: serverTimestamp(), sortOrder: editingBookId ? (textbooks.find(t=>t.id===editingBookId)?.sortOrder || 0) : textbooks.length };
     const targetId = editingBookId;
-
-    setIsModalOpen(false); 
-    setEditingBookId(null);
-    setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
-
-    const runAsyncSave = async () => {
+    setIsModalOpen(false); setEditingBookId(null); setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
+    const runSave = async () => {
       try {
         if (targetId) await updateDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', targetId), bookData);
         else await addDoc(collection(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks'), bookData);
       } catch (err) { console.error(err); }
     };
-    runAsyncSave();
+    runSave();
   };
 
   // --- Views ---
 
   if (!user && !loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
-        <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl p-10 text-center animate-in zoom-in-95 duration-300">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans relative z-[60]">
+        <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl p-10 text-center">
           <div className="w-20 h-20 bg-indigo-600 rounded-3xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-10 h-10 text-white" /></div>
           <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter">CPA Tracker</h1>
           <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest leading-relaxed">Login to Sync Across Devices</p>
           
-          <form onSubmit={handleAuth} className="space-y-4 text-left">
+          <form onSubmit={handleAuth} className="space-y-4 text-left pointer-events-auto">
             <div className="space-y-1">
-              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Email Address</label>
+              <label htmlFor="email" className="text-[9px] font-black text-slate-400 uppercase ml-2">Email Address</label>
               <input 
-                required 
-                type="email" 
-                name="email"
-                id="login-email"
-                autoComplete="email"
-                placeholder="メールアドレス" 
-                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none transition-all select-text" 
-                value={authEmail} 
-                onChange={e => setAuthEmail(e.target.value)}
+                required type="email" id="email" autoComplete="email" placeholder="メールアドレス" 
+                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none transition-all pointer-events-auto cursor-text select-text" 
+                value={authEmail} onChange={e => setAuthEmail(e.target.value)}
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Password</label>
+              <label htmlFor="password" className="text-[9px] font-black text-slate-400 uppercase ml-2">Password</label>
               <input 
-                required 
-                type="password" 
-                name="password"
-                id="login-password"
-                autoComplete="current-password"
-                placeholder="パスワード" 
-                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none transition-all select-text" 
-                value={authPassword} 
-                onChange={e => setAuthPassword(e.target.value)}
+                required type="password" id="password" autoComplete="current-password" placeholder="パスワード" 
+                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl py-4 px-5 text-sm font-bold outline-none transition-all pointer-events-auto cursor-text select-text" 
+                value={authPassword} onChange={e => setAuthPassword(e.target.value)}
               />
             </div>
             {authError && <div className="text-red-500 text-[10px] font-bold px-2">{authError}</div>}
@@ -345,7 +309,7 @@ const App = () => {
                <div className="text-[11px] font-black text-slate-800 font-mono tracking-tighter leading-none">
                  {time.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                </div>
-               <div className="text-[8px] font-black text-slate-400 mt-1 leading-none">
+               <div className="text-[8px] font-black text-slate-400 mt-1.5 leading-none">
                  {currentDate.replace(/-/g, '/')}({getDayName(currentDate)})
                </div>
             </div>
@@ -385,7 +349,7 @@ const App = () => {
           <button onClick={() => { setEditingBookId(null); setForm({title:'',totalPages:'',currentPage:'',coverUrl:''}); setIsModalOpen(true); }} className="bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-lg active:scale-95 flex items-center gap-2"><Plus className="w-4 h-4" /> <span className="font-black text-xs text-nowrap">教材追加</span></button>
         </div>
 
-        {/* TEXTBOOK LIST */}
+        {/* LIST */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {textbooks.map((b, idx) => {
             const prog = Math.round((Number(b.currentPage) / (Number(b.totalPages) || 1)) * 100);
@@ -430,7 +394,7 @@ const App = () => {
         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4 z-[100] animate-in fade-in duration-300">
           <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl p-8 transform animate-in zoom-in-95 duration-300 overflow-y-auto max-h-[90vh]">
             <h2 className="text-xl font-black text-center mb-8 font-mono">{editingBookId ? '情報を修正' : '教材を追加'}</h2>
-            <form onSubmit={handleSave} className="space-y-5">
+            <form onSubmit={handleSave} className="space-y-5 pointer-events-auto">
               <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none focus:border-indigo-600 border-2 border-transparent select-text" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
               <div className="flex flex-col items-center gap-3 border-2 border-dashed border-slate-200 rounded-2xl p-6 bg-slate-50 cursor-pointer" onClick={() => fileInputRef.current?.click()}>
                 {form.coverUrl ? <img src={String(form.coverUrl)} className="w-20 h-28 object-cover rounded-xl shadow-md" alt="" /> : <><ImageIcon className="w-6 h-6 text-slate-300" /><span className="text-[10px] font-black text-slate-400 text-center">カバー画像アップロード<br/>(省略可)</span></>}
@@ -448,7 +412,7 @@ const App = () => {
 
       {isLogoutModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] animate-in fade-in duration-300">
-          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center animate-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center">
             <h3 className="font-black text-lg mb-2 text-slate-800">ログアウトしますか？</h3>
             <p className="text-[11px] text-slate-400 mb-8 leading-relaxed font-bold">ログイン中のメールアドレス:<br/>{user?.email}</p>
             <div className="flex gap-3"><button onClick={() => setIsLogoutModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95 transition-all">キャンセル</button><button onClick={handleLogout} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">ログアウト</button></div>
@@ -460,8 +424,7 @@ const App = () => {
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100]">
           <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center animate-in zoom-in-95 duration-200">
             <h3 className="font-black text-lg mb-2 text-slate-800">教材を削除しますか？</h3>
-            <p className="text-[11px] text-slate-400 mb-8 font-bold text-balance">これまでの学習記録も削除されます。</p>
-            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95 transition-all">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">削除する</button></div>
+            <div className="flex gap-3 mt-8"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95 transition-all">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">削除する</button></div>
           </div>
         </div>
       )}
