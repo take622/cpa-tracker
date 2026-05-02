@@ -32,7 +32,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// デバイス間同期のための固定ID（変更禁止）
+// このIDで全デバイスのデータを紐付けます
 const STABLE_STORAGE_ID = "cpa_tracker_final_storage_fixed";
 
 const MASCOT_MESSAGES = [
@@ -90,18 +90,22 @@ const resizeImage = (file) => {
   });
 };
 
-// --- 合格くんコンポーネント ---
 const Mascot = () => {
   const [index, setIndex] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setIndex(i => (i + 1) % MASCOT_MESSAGES.length), 600000);
+    return () => clearInterval(t);
+  }, []);
+
   return (
     <div className="flex items-start gap-2 bg-indigo-900 p-2.5 rounded-xl border border-indigo-700 cursor-pointer flex-1 min-w-0" onClick={() => setIndex(i => (i + 1) % MASCOT_MESSAGES.length)}>
       <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0">
-        <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Final-Support-V12&backgroundColor=6366f1" alt="Mascot" className="w-6 h-6" />
+        <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Final-Support-Check&backgroundColor=6366f1" alt="Mascot" className="w-6 h-6" />
       </div>
       <div className="min-w-0 flex-1 text-left">
         <div className="flex items-center gap-1 mb-0.5">
           <Heart className="w-2 h-2 text-rose-400 fill-rose-400" />
-          <span className="text-[7px] font-black text-indigo-300 uppercase tracking-tighter">Study Support</span>
+          <span className="text-[7px] font-black text-indigo-300 uppercase tracking-tighter">Support Message</span>
         </div>
         <p className="text-[10px] font-bold text-white leading-tight break-words">{MASCOT_MESSAGES[index]}</p>
       </div>
@@ -134,13 +138,11 @@ const App = () => {
   const fileInputRef = useRef(null);
   const [form, setForm] = useState({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
 
-  // 1秒ごとの時計
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // 認証監視
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
@@ -156,13 +158,12 @@ const App = () => {
     return { percent: tot > 0 ? Math.round((cur / tot) * 100) : 0, current: cur, total: tot };
   }, [textbooks]);
 
-  // 【デバイス間同期の核心】リアルタイムリスナー
+  // クラウド同期の核 (デバイス間共有)
   useEffect(() => {
     if (!user) return;
     const todayStr = getTodayStr();
     setCurrentDate(todayStr);
 
-    // 1. 週間設定の同期
     const goalRef = doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'settings', 'weeklyGoal');
     const unsubGoal = onSnapshot(goalRef, (snap) => {
       if (snap.exists()) {
@@ -177,13 +178,9 @@ const App = () => {
       }
     });
 
-    // 2. 今日の進捗の同期
     const todayRef = doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'dailyLogs', todayStr);
-    const unsubToday = onSnapshot(todayRef, (snap) => {
-      setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
-    });
+    const unsubToday = onSnapshot(todayRef, (snap) => setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0));
 
-    // 3. 教材リストの同期
     const booksCol = collection(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
       setTextbooks(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
@@ -200,7 +197,7 @@ const App = () => {
       if (isLoginMode) await signInWithEmailAndPassword(auth, authEmail, authPassword);
       else await createUserWithEmailAndPassword(auth, authEmail, authPassword);
     } catch (err) {
-      setAuthError("認証に失敗。メール/パスワードを確認してください。");
+      setAuthError("認証に失敗しました。入力内容を再確認してください。");
     } finally { setIsAuthProcessing(false); }
   };
 
@@ -217,7 +214,6 @@ const App = () => {
     const newVal = Math.min(Math.max(0, parseInt(val || 0)), b.totalPages);
     const dlt = newVal - b.currentPage;
     if (dlt === 0) return;
-
     const batch = writeBatch(db);
     batch.update(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
     batch.set(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
@@ -252,42 +248,27 @@ const App = () => {
 
   if (loading) return <div className="min-h-screen bg-white flex items-center justify-center font-sans"><Loader2 className="w-8 h-8 animate-spin text-indigo-200" /></div>;
 
-  // --- LOGIN VIEW (入力感度を最優先) ---
   if (!user) {
     return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6 font-sans">
-        {/* スマホのあらゆる入力を100%許可するCSS */}
+      <div className="fixed inset-0 bg-slate-100 flex items-center justify-center p-6 font-sans overflow-auto" style={{ zIndex: 9999 }}>
         <style dangerouslySetInnerHTML={{ __html: `
-          body, html, #root { -webkit-user-select: auto !important; user-select: auto !important; }
-          input { 
-            -webkit-user-select: text !important; 
-            user-select: text !important; 
-            pointer-events: auto !important; 
-            -webkit-appearance: none;
-          }
+          body, html { -webkit-user-select: auto !important; user-select: auto !important; position: static !important; overflow: auto !important; }
+          input { -webkit-user-select: text !important; user-select: text !important; pointer-events: auto !important; -webkit-appearance: none; }
         ` }} />
         
-        <div className="bg-white w-full max-w-sm rounded-[2rem] shadow-xl p-8 text-center border border-slate-200">
+        <div className="bg-white w-full max-w-sm rounded-[2rem] shadow-xl p-8 text-center border border-slate-200 relative z-[10000]">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
           <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter">CPA Tracker</h1>
-          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">Sync Progress via Cloud</p>
+          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">Cloud Sync Study Hub</p>
           
-          <form onSubmit={handleAuth} className="space-y-4 text-left">
+          <form onSubmit={handleAuth} className="space-y-4 text-left pointer-events-auto">
             <div className="space-y-1">
-              <label htmlFor="email" className="text-[9px] font-black text-slate-400 uppercase ml-2">Email</label>
-              <input 
-                required type="email" id="email" autoComplete="email" placeholder="メールアドレス" 
-                className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-5 text-base font-bold outline-none block" 
-                value={authEmail} onChange={e => setAuthEmail(e.target.value)}
-              />
+              <label htmlFor="e-in" className="text-[9px] font-black text-slate-400 uppercase ml-2">Email</label>
+              <input required type="email" id="e-in" autoComplete="email" placeholder="メールアドレス" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-5 text-base font-bold outline-none block pointer-events-auto" value={authEmail} onChange={e => setAuthEmail(e.target.value)} />
             </div>
             <div className="space-y-1">
-              <label htmlFor="password" className="text-[9px] font-black text-slate-400 uppercase ml-2">Password</label>
-              <input 
-                required type="password" id="password" autoComplete="current-password" placeholder="パスワード" 
-                className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-5 text-base font-bold outline-none block" 
-                value={authPassword} onChange={e => setAuthPassword(e.target.value)}
-              />
+              <label htmlFor="p-in" className="text-[9px] font-black text-slate-400 uppercase ml-2">Password</label>
+              <input required type="password" id="p-in" autoComplete="current-password" placeholder="パスワード" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-5 text-base font-bold outline-none block pointer-events-auto" value={authPassword} onChange={e => setAuthPassword(e.target.value)} />
             </div>
             {authError && <div className="text-red-500 text-[10px] font-bold px-2">{authError}</div>}
             <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-xl py-4 font-black text-sm shadow-md active:scale-95 transition-all mt-4">{isAuthProcessing ? 'Connecting...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
@@ -298,12 +279,11 @@ const App = () => {
     );
   }
 
-  // --- MAIN VIEW ---
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans overflow-x-hidden">
       <style dangerouslySetInnerHTML={{ __html: `input { -webkit-user-select: text !important; user-select: text !important; pointer-events: auto !important; }` }} />
 
-      {/* HEADER: 時計と日付・曜日表示を固定 */}
+      {/* HEADER: 時計と日付・曜日表示 */}
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 px-3 py-2 shadow-sm">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           <Mascot />
@@ -332,11 +312,11 @@ const App = () => {
             <div className="text-[8px] font-black text-indigo-600 uppercase mb-1">今日進捗</div>
             <div className="flex items-center justify-center gap-1">
               <span className="text-xl sm:text-2xl font-black text-slate-800">{Number(todayStudied)}P</span>
-              <button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-0.5 bg-indigo-50 text-indigo-600 rounded-md active:scale-90"><Plus className="w-3 h-3" /></button>
+              <button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-0.5 bg-indigo-50 text-indigo-600 rounded-md"><Plus className="w-3 h-3" /></button>
             </div>
           </div>
           <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700">
-            <div className="text-white/60 text-[8px] font-black uppercase mb-1 text-nowrap">全体進捗</div>
+            <div className="text-white/60 text-[8px] font-black uppercase mb-1">全体進捗</div>
             <div className="text-xl sm:text-2xl font-black">{Number(totalProgress.percent)}%</div>
           </div>
         </div>
@@ -395,26 +375,20 @@ const App = () => {
         </div>
       </main>
 
-      {/* SYNC INDICATOR */}
-      <div className="fixed bottom-4 left-4 bg-white/80 backdrop-blur px-3 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center gap-2 z-[30]">
-        <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-        <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest text-nowrap">Cloud Synced</span>
-      </div>
-
       {/* MODALS */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-4 z-[100] pointer-events-auto">
           <div className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl p-8 overflow-y-auto max-h-[90vh]">
             <h2 className="text-xl font-black text-center mb-8 font-mono">{editingBookId ? '修正' : '追加'}</h2>
             <form onSubmit={handleSave} className="space-y-5">
-              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none focus:border-indigo-600 border border-slate-200" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
+              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none focus:border-indigo-600 border border-slate-200 select-text" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
               <div className="flex flex-col items-center gap-3 border-2 border-dashed border-slate-200 rounded-2xl p-6 bg-slate-50 cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-                {form.coverUrl ? <img src={String(form.coverUrl)} className="w-20 h-28 object-cover rounded-xl shadow-md" alt="" /> : <><ImageIcon className="w-6 h-6 text-slate-300" /><span className="text-[10px] font-black text-slate-400 text-center">カバー画像アップロード</span></>}
+                {form.coverUrl ? <img src={String(form.coverUrl)} className="w-20 h-28 object-cover rounded-xl shadow-md" alt="" /> : <><ImageIcon className="w-6 h-6 text-slate-300" /><span className="text-[10px] font-black text-slate-400 text-center">カバー画像をアップロード</span></>}
                 <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={async (e) => { const f = e.target.files[0]; if(f) setForm({...form, coverUrl: await resizeImage(f)}); }} />
               </div>
               <div className="grid grid-cols-2 gap-4 text-left">
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2 uppercase">Total</label><input required type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2 uppercase">Current</label><input type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2 uppercase">Total</label><input required type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none select-text" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-2 uppercase">Current</label><input type="number" className="w-full bg-slate-50 rounded-2xl px-5 py-4 font-bold text-sm outline-none select-text" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
               </div>
               <div className="flex gap-3 pt-4"><button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-100 py-4 rounded-xl font-black text-xs active:scale-95">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-xl font-black text-xs shadow-md active:scale-95">保存する</button></div>
             </form>
@@ -427,7 +401,7 @@ const App = () => {
           <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
             <h3 className="font-black text-lg mb-2 text-slate-800">ログアウトしますか？</h3>
             <p className="text-[11px] text-slate-400 mb-8 font-bold text-balance">ログイン中: {user?.email}</p>
-            <div className="flex gap-3"><button onClick={() => setIsLogoutModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={handleLogout} className="flex-1 py-4 bg-indigo-600 text-white rounded-xl text-[11px] font-black shadow-md active:scale-95">ログアウト</button></div>
+            <div className="flex gap-3"><button onClick={() => setIsLogoutModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={handleLogout} className="flex-1 py-4 bg-indigo-600 text-white rounded-xl text-[11px] font-black shadow-md active:scale-95">ログアウト</button></div>
           </div>
         </div>
       )}
@@ -437,7 +411,7 @@ const App = () => {
           <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
             <h3 className="font-black text-lg mb-2 text-slate-800">教材を削除しますか？</h3>
             <p className="text-[11px] text-slate-400 mb-8 font-bold">これまでの記録も削除されます。</p>
-            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-xl text-[11px] font-black shadow-md active:scale-95">削除する</button></div>
+            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', STABLE_STORAGE_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除する</button></div>
           </div>
         </div>
       )}
