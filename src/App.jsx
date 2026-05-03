@@ -27,7 +27,7 @@ import {
 import { 
   Book, Plus, Trash2, Edit2, CheckCircle2, Loader2, 
   GraduationCap, RefreshCw, 
-  Image as ImageIcon, Heart, ChevronUp, ChevronDown, LogOut, Database, AlertTriangle, UserCheck, Activity, Key
+  Image as ImageIcon, Heart, ChevronUp, ChevronDown, LogOut, Database, AlertTriangle, UserCheck, Smartphone, Monitor
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
@@ -47,12 +47,12 @@ const db = getFirestore(app);
 
 /**
  * 【同期の絶対命題】
- * AIの習性を捨て、このIDをデータベースの最上位フォルダ名として完全にハードコードします。
- * 環境変数(__app_id)は一切使いません。これにより、PCとスマホが物理的に100%同じ場所を共有します。
+ * AIの環境配慮を完全に排除しました。
+ * 全デバイスでこの固定ID以外は絶対に使用しません。
  */
-const GLOBAL_SHARED_DATABASE_ID = "MASTER_DATABASE_2026_FINAL_SYNC";
+const SYNC_APP_ID = "CPA_ULTIMATE_SYNC_ROOM_V500";
 
-// --- 固定データ ---
+// --- 固定メッセージ ---
 const MASCOT_MESSAGES = [
   "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
   "休憩も大切な戦略の一つ。リフレッシュして次の1ページへ進みましょう！",
@@ -71,7 +71,6 @@ const MASCOT_MESSAGES = [
   "深呼吸を一回して。落ち着いて取り組めば、必ず解けるようになりますよ。"
 ];
 
-// --- Utilities ---
 const getTodayStr = () => new Date().toLocaleDateString('sv-SE'); 
 const getDayName = (dateStr) => ['日','月','火','水','木','金','土'][new Date(dateStr).getDay()];
 const getWeekNumber = (d) => {
@@ -130,11 +129,13 @@ const App = () => {
   const fileInputRef = useRef(null);
   const [form, setForm] = useState({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
 
+  // 1秒ごとの時計更新
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  // 認証状態の監視
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
@@ -150,15 +151,15 @@ const App = () => {
     return { percent: tot > 0 ? Math.round((cur / tot) * 100) : 0, current: cur, total: tot };
   }, [textbooks]);
 
-  // 【デバイス間リアルタイム同期ロジック】
+  // 【同一画面を共有するためのリアルタイム・リスナー】
   useEffect(() => {
     if (!user) return;
     setSyncError(null);
     const todayStr = getTodayStr();
     setCurrentDate(todayStr);
 
-    // 1. 週間設定の監視 (GLOBAL_SHARED_DATABASE_IDを使用)
-    const goalRef = doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'settings', 'weeklyGoal');
+    // 1. 週間設定の監視
+    const goalRef = doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'settings', 'weeklyGoal');
     const unsubGoal = onSnapshot(goalRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
@@ -170,20 +171,20 @@ const App = () => {
       } else {
         setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: todayStr });
       }
-    }, (err) => setSyncError("設定同期エラー: " + err.message));
+    }, (err) => setSyncError("Sync Err(Goal): " + err.code));
 
     // 2. 今日の記録の監視
-    const todayRef = doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'dailyLogs', todayStr);
+    const todayRef = doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'dailyLogs', todayStr);
     const unsubToday = onSnapshot(todayRef, (snap) => {
       setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
-    });
+    }, (err) => setSyncError("Sync Err(Log): " + err.code));
 
     // 3. 教材リストの監視
-    const booksCol = collection(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'textbooks');
+    const booksCol = collection(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setTextbooks(data.sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
-    }, (err) => setSyncError("教材同期エラー: " + err.message));
+    }, (err) => setSyncError("Sync Err(Books): " + err.code));
 
     return () => { unsubGoal(); unsubToday(); unsubBooks(); };
   }, [user]);
@@ -192,7 +193,7 @@ const App = () => {
     if (!user || isSyncing) return;
     setIsSyncing(true);
     try {
-      const booksCol = collection(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'textbooks');
+      const booksCol = collection(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks');
       const bSnap = await getDocs(booksCol);
       setTextbooks(bSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
       setTimeout(() => setIsSyncing(false), 800);
@@ -212,7 +213,7 @@ const App = () => {
         await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword);
       }
     } catch (err) {
-      setAuthError("認証に失敗。正しいメール・パスワードを入力してください。");
+      setAuthError("認証に失敗しました。正しいメール・パスワードを入力してください。");
     } finally { setIsAuthProcessing(false); }
   };
 
@@ -232,9 +233,9 @@ const App = () => {
     if (dlt === 0) return;
 
     const batch = writeBatch(db);
-    batch.update(doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
-    batch.set(doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
-    batch.update(doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: currentDate });
+    batch.update(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
+    batch.set(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
+    batch.update(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: currentDate });
     await batch.commit();
   };
 
@@ -243,8 +244,8 @@ const App = () => {
     const targetIndex = index + direction;
     if (targetIndex < 0 || targetIndex >= textbooks.length) return;
     const batch = writeBatch(db);
-    batch.update(doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
-    batch.update(doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
+    batch.update(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
+    batch.update(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
     await batch.commit();
   };
 
@@ -261,14 +262,14 @@ const App = () => {
     const tid = editingBookId;
     setIsModalOpen(false); setEditingBookId(null); setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
     try {
-      if (tid) await updateDoc(doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'textbooks', tid), bookData);
-      else await addDoc(collection(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'textbooks'), bookData);
-    } catch (err) { setSyncError("保存に失敗しました: " + err.message); }
+      if (tid) await updateDoc(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', tid), bookData);
+      else await addDoc(collection(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks'), bookData);
+    } catch (err) { setSyncError("保存失敗: " + err.message); }
   };
 
   if (loading) return <div className="min-h-screen bg-white flex items-center justify-center font-sans"><Loader2 className="w-8 h-8 animate-spin text-indigo-500" /></div>;
 
-  // --- LOGIN VIEW (入力感度を優先) ---
+  // --- LOGIN ---
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans">
@@ -276,14 +277,14 @@ const App = () => {
         <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl p-8 text-center border border-slate-200">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
           <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter">CPA Tracker</h1>
-          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">{isLoginMode ? 'Login to Master Sync' : 'Create Shared Account'}</p>
+          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">{isLoginMode ? 'Login to Shared Space' : 'Create Account'}</p>
           <form onSubmit={handleAuth} className="space-y-4">
             <div className="text-left"><label className="text-[9px] font-black text-slate-400 uppercase ml-1">Email</label><input required type="email" placeholder="example@cpa.com" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 text-base font-bold outline-none block" value={authEmail} onChange={e => setAuthEmail(e.target.value)} /></div>
             <div className="text-left"><label className="text-[9px] font-black text-slate-400 uppercase ml-1">Password</label><input required type="password" placeholder="••••••••" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 text-base font-bold outline-none block" value={authPassword} onChange={e => setAuthPassword(e.target.value)} /></div>
             {authError && <div className="text-red-500 text-[10px] font-bold py-1">{authError}</div>}
             <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all mt-4">{isAuthProcessing ? 'Connecting...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
           </form>
-          <button type="button" onClick={() => setIsLoginMode(!isLoginMode)} className="mt-6 text-[10px] font-black text-indigo-600 uppercase tracking-widest block w-full">{isLoginMode ? 'New here? Sign Up' : 'Already have an account? Login'}</button>
+          <button type="button" onClick={() => setIsLoginMode(!isLoginMode)} className="mt-6 text-[10px] font-black text-indigo-600 uppercase tracking-widest block w-full">{isLoginMode ? 'New here? Sign Up' : 'Back to Login'}</button>
         </div>
       </div>
     );
@@ -295,13 +296,14 @@ const App = () => {
 
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 px-3 py-2 shadow-sm">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
-          <div className="flex-1 bg-indigo-900 p-2 rounded-xl border border-indigo-700 flex items-start gap-2">
-            <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
+          <div className="flex-1 bg-indigo-900 p-2 rounded-xl border border-indigo-700 flex items-start gap-2 shadow-inner">
+            <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0">
                <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Support" className="w-6 h-6" />
             </div>
             <p className="text-[10px] font-bold text-white leading-tight">{MASCOT_MESSAGES[Math.floor(time.getMinutes() / 4) % MASCOT_MESSAGES.length]}</p>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={forceSync} className={`p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-slate-400 active:scale-90 transition-all ${isSyncing ? 'animate-spin text-indigo-600' : ''}`}><RefreshCw className="w-4 h-4" /></button>
             <div className="flex flex-col items-end bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shadow-inner shrink-0">
                <div className="text-[11px] font-black text-slate-800 font-mono tracking-tighter leading-none mb-1">{time.toLocaleTimeString('ja-JP', { hour12: false })}</div>
                <div className="text-[8px] font-black text-slate-400 leading-none">{currentDate.replace(/-/g, '/')}({getDayName(currentDate)})</div>
@@ -326,7 +328,7 @@ const App = () => {
             <div className="flex flex-col"><span className="text-[8px] font-black text-slate-400 uppercase">週間目標</span>
               <div className="flex items-center gap-1"><input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent" /><span className="text-[9px] font-bold text-slate-300">P/w</span></div>
             </div>
-            <button onClick={() => setDoc(doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user?.uid, 'settings', 'weeklyGoal'), { remainingTarget: weeklyGoalBase, lastUpdatedDate: getTodayStr() }, { merge: true })} className="p-1.5 text-slate-300 active:rotate-180 transition-all ml-2"><RefreshCw className="w-4 h-4" /></button>
+            <button onClick={() => setDoc(doc(db, 'artifacts', SYNC_APP_ID, 'users', user?.uid, 'settings', 'weeklyGoal'), { remainingTarget: weeklyGoalBase, lastUpdatedDate: getTodayStr() }, { merge: true })} className="p-1.5 text-slate-300 active:rotate-180 transition-all ml-2"><RefreshCw className="w-4 h-4" /></button>
           </div>
           <button onClick={() => { setEditingBookId(null); setForm({title:'',totalPages:'',currentPage:'',coverUrl:''}); setIsModalOpen(true); }} className="bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-lg active:scale-95 flex items-center gap-2 font-black text-xs text-nowrap"><Plus className="w-4 h-4" /> 教材追加</button>
         </div>
@@ -349,6 +351,10 @@ const App = () => {
                        <button onClick={() => setDeleteConfirmId(b.id)} className="text-slate-400 p-1 active:scale-90"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </div>
+                  <div className="flex items-center gap-2 mb-2">
+                     <div className="flex-grow bg-slate-100 h-2 rounded-full overflow-hidden"><div className={`h-full transition-all duration-700 ${prog >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`} style={{ width: `${prog}%` }} /></div>
+                     <span className="text-[10px] font-black text-slate-400 shrink-0">{prog}%</span>
+                  </div>
                   <div className="flex items-center gap-1.5"><input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-14 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none" /><span className="text-[10px] text-slate-400 font-bold shrink-0">/ {Number(b.totalPages)} P</span></div>
                 </div>
               </div>
@@ -357,20 +363,20 @@ const App = () => {
         </div>
       </main>
 
-      {/* SYNC INDICATOR & UID DISPLAY */}
+      {/* SYNC INDICATOR & DEBUG (同期成功の証) */}
       <div className="fixed bottom-4 left-4 right-4 flex flex-col gap-1 pointer-events-none z-[100]">
         <div className="flex items-center justify-between">
           <div className="bg-white/90 px-3 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center gap-2">
-            <Database className="w-3.5 h-3.5 text-indigo-600" />
-            <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest text-nowrap">Unified Cloud Sync</span>
+            <Database className="w-3 h-3 text-indigo-600" />
+            <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Shared Global System</span>
           </div>
           <div className="bg-white/90 px-3 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center gap-1.5 text-[7px] font-mono text-slate-500">
-             <UserCheck className="w-2.5 h-2.5" /> UID:{user?.uid.slice(-12).toUpperCase()}
+             <UserCheck className="w-2.5 h-2.5 text-indigo-500" /> UID:{user?.uid.slice(-12).toUpperCase()}
           </div>
         </div>
-        <div className="flex items-center justify-center bg-white/80 rounded-lg px-2 py-0.5 border border-slate-100">
-           <Activity className="w-2 h-2 text-slate-400 mr-1" />
-           <span className="text-[6px] font-bold text-slate-400 font-mono tracking-tighter">STORAGE: /artifacts/{GLOBAL_SHARED_DATABASE_ID}/...</span>
+        <div className="flex items-center justify-center bg-white/80 rounded-lg px-2 py-0.5 border border-slate-100 shadow-sm">
+           <Activity className="w-2 h-2 text-indigo-400 mr-1" />
+           <span className="text-[6px] font-bold text-slate-400 font-mono tracking-tighter uppercase">ADDR: /artifacts/{SYNC_APP_ID}/...</span>
         </div>
         {syncError && (
           <div className="bg-red-50 text-red-600 px-3 py-2 rounded-xl border border-red-200 flex items-center gap-2 shadow-lg animate-bounce">
@@ -413,7 +419,7 @@ const App = () => {
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
           <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
             <h3 className="font-black text-lg mb-2 text-slate-800">削除しますか？</h3>
-            <div className="flex gap-3 mt-8"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { await deleteDoc(doc(db, 'artifacts', GLOBAL_SHARED_DATABASE_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除</button></div>
+            <div className="flex gap-3 mt-8"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', SYNC_APP_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除</button></div>
           </div>
         </div>
       )}
