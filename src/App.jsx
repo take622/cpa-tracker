@@ -23,12 +23,13 @@ import {
   getDoc,
   enableNetwork,
   disableNetwork,
-  waitForPendingWrites
+  query,
+  limit
 } from 'firebase/firestore';
 import { 
   Book, Plus, Trash2, Edit2, CheckCircle2, Loader2, 
   GraduationCap, RefreshCw, 
-  Image as ImageIcon, Heart, ChevronUp, ChevronDown, LogOut, Database, AlertTriangle, UserCheck, Activity, Wifi, WifiOff, Terminal, Key, Smartphone, Monitor
+  Image as ImageIcon, Heart, ChevronUp, ChevronDown, LogOut, Database, AlertTriangle, UserCheck, Activity, Wifi, WifiOff, Terminal, Key, Info
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
@@ -47,31 +48,24 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 /**
- * 【同期の絶対命題：V6000-ULTIMATE-SYNC】
- * AIの習性を完全に排除。
- * 画面点灯・タブ復帰時に「強制オンライン」を実行するエンジンを搭載。
+ * 【同期の絶対命題：V7000-SERVER-FIRST】
+ * AIの環境忖度を完全排除。
+ * キャッシュ(Cached)を極力無視し、サーバー(Server)の生データを強制同期。
  */
-const VERSION = "V6000-SYNC-MAX";
-const MASTER_DB_ID = "CPA_GLOBAL_STORAGE_V6000";
+const VERSION = "V7000-ULTIMATE";
+const MASTER_DB_PATH = "CPA_ROOT_V7000";
 
 const MASCOT_MESSAGES = [
   "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
   "休憩も大切な戦略の一つ。リフレッシュして次の1ページへ進みましょう！",
-  "あなたのこれまでの努力は裏切りません。自分を信じて。",
-  "難しい論点にぶつかるのは、あなたが成長している証拠です。大丈夫！",
-  "公認会計士という大きな夢に向かって、着実に歩んでいる姿は素敵です。",
-  "深呼吸を一回して。落ち着いて取り組めば、必ず解けるようになりますよ。"
+  "あなたの努力は裏切りません。自分を信じて。",
+  "公認会計士という大きな夢に向かって、一歩ずつ。",
+  "一問一問の理解が、本番での大きな1点に繋がります。",
+  "机に向かうその決意こそが、合格者としての第一歩です。"
 ];
 
 const getTodayStr = () => new Date().toLocaleDateString('sv-SE'); 
 const getDayName = (dateStr) => ['日','月','火','水','木','金','土'][new Date(dateStr).getDay()];
-const getWeekNumber = (d) => {
-  const date = new Date(d);
-  date.setHours(0, 0, 0, 0);
-  date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
-  const week1 = new Date(date.getFullYear(), 0, 4);
-  return 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
-};
 
 const resizeImage = (file) => {
   return new Promise((resolve) => {
@@ -102,7 +96,7 @@ const App = () => {
   const [isLoginMode, setIsLoginMode] = useState(true);
   const [isAuthProcessing, setIsAuthProcessing] = useState(false);
   const [syncError, setSyncError] = useState(null);
-  const [isFromCache, setIsFromCache] = useState(false);
+  const [dataOrigin, setDataOrigin] = useState("Checking...");
 
   const [textbooks, setTextbooks] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -122,45 +116,76 @@ const App = () => {
   const fileInputRef = useRef(null);
   const [form, setForm] = useState({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
 
-  // --- 【究極のオンライン維持エンジン】 ---
-  const awakenNetwork = async () => {
-    if (!auth.currentUser) return;
-    setIsSyncing(true);
-    try {
-      await enableNetwork(db);
-      setIsFromCache(false);
-      setSyncError(null);
-    } catch (e) { console.error("Awaken failed"); }
-    finally { setTimeout(() => setIsSyncing(false), 500); }
-  };
-
+  // 1. 認証監視
   useEffect(() => {
-    // 画面に戻ってきたら即座にオンラインに引き戻す
-    const handleReactivation = () => {
-      if (document.visibilityState === 'visible') awakenNetwork();
-    };
-    window.addEventListener('online', awakenNetwork);
-    document.addEventListener('visibilitychange', handleReactivation);
-    return () => {
-      window.removeEventListener('online', awakenNetwork);
-      document.removeEventListener('visibilitychange', handleReactivation);
-    };
-  }, [user]);
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setLoading(false);
+      if (!u) {
+        setTextbooks([]);
+        setDataOrigin("Offline");
+      }
+    });
+    return () => unsub();
+  }, []);
 
-  // 時計
+  // 2. 時計
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // 認証監視（白画面防止ガード付き）
+  // 3. 【サーバー生データ強制取得エンジン】
+  const forceServerSync = async () => {
+    if (!auth.currentUser) return;
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      await enableNetwork(db);
+      // getDocsでサーバーから直接引く
+      const colRef = collection(db, 'artifacts', MASTER_DB_PATH, 'users', auth.currentUser.uid, 'textbooks');
+      const snap = await getDocs(colRef);
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setTextbooks(list.sort((a,b) => (Number(a.sortOrder)||0) - (Number(b.sortOrder)||0)));
+      setDataOrigin("Server");
+    } catch (e) {
+      setSyncError("Sync Failed: " + e.message);
+    } finally {
+      setTimeout(() => setIsSyncing(false), 800);
+    }
+  };
+
+  // 4. リアルタイム・リスナー（ログイン中のみ起動）
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
+    if (!user) return;
+    
+    setCurrentDate(getTodayStr());
+    forceServerSync(); // ログイン直後に強制リフレッシュ
+
+    const goalRef = doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'settings', 'weeklyGoal');
+    const unsubGoal = onSnapshot(goalRef, (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        setRemainingWeeklyTarget(Number(d.remainingTarget ?? 380));
+        setWeeklyGoalBase(Number(d.baseTarget ?? 380));
+      } else {
+        setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: getTodayStr() });
+      }
     });
-    return () => unsub();
-  }, []);
+
+    const todayRef = doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'dailyLogs', getTodayStr());
+    const unsubToday = onSnapshot(todayRef, (snap) => {
+      setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
+    });
+
+    const booksCol = collection(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks');
+    const unsubBooks = onSnapshot(booksCol, { includeMetadataChanges: true }, (snap) => {
+      setTextbooks(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (Number(a.sortOrder)||0) - (Number(b.sortOrder)||0)));
+      setDataOrigin(snap.metadata.fromCache ? "Cached" : "Server");
+    }, (err) => setSyncError(err.message));
+
+    return () => { unsubGoal(); unsubToday(); unsubBooks(); };
+  }, [user]);
 
   const totalProgress = useMemo(() => {
     if (textbooks.length === 0) return { percent: 0, current: 0, total: 0 };
@@ -169,52 +194,16 @@ const App = () => {
     return { percent: tot > 0 ? Math.round((cur / tot) * 100) : 0, current: cur, total: tot };
   }, [textbooks]);
 
-  // --- リアルタイム同期メイン ---
-  useEffect(() => {
-    if (!user) return;
-    setSyncError(null);
-    setCurrentDate(getTodayStr());
-    awakenNetwork();
-
-    const goalRef = doc(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'settings', 'weeklyGoal');
-    const unsubGoal = onSnapshot(goalRef, (snap) => {
-      if (snap.exists()) {
-        const d = snap.data();
-        const t = getTodayStr();
-        if (d.lastUpdatedDate && getWeekNumber(t) !== getWeekNumber(d.lastUpdatedDate)) {
-           updateDoc(goalRef, { remainingTarget: Number(d.baseTarget || 380), lastUpdatedDate: t });
-        }
-        setRemainingWeeklyTarget(Number(d.remainingTarget ?? 380));
-        setWeeklyGoalBase(Number(d.baseTarget ?? 380));
-      } else {
-        setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: getTodayStr() });
-      }
-    }, (err) => setSyncError(err.message));
-
-    const todayRef = doc(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'dailyLogs', getTodayStr());
-    const unsubToday = onSnapshot(todayRef, (snap) => {
-      setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
-    });
-
-    const booksCol = collection(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'textbooks');
-    const unsubBooks = onSnapshot(booksCol, { includeMetadataChanges: true }, (snap) => {
-      setTextbooks(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (Number(a.sortOrder)||0) - (Number(b.sortOrder)||0)));
-      setIsFromCache(snap.metadata.fromCache);
-    }, (err) => setSyncError(err.message));
-
-    return () => { unsubGoal(); unsubToday(); unsubBooks(); };
-  }, [user]);
-
   const handleAuth = async (e) => {
     e.preventDefault();
     setAuthError("");
     setIsAuthProcessing(true);
-    const cleanEmail = authEmail.trim();
+    const email = authEmail.trim();
     try {
-      if (isLoginMode) await signInWithEmailAndPassword(auth, cleanEmail, authPassword);
-      else await createUserWithEmailAndPassword(auth, cleanEmail, authPassword);
+      if (isLoginMode) await signInWithEmailAndPassword(auth, email, authPassword);
+      else await createUserWithEmailAndPassword(auth, email, authPassword);
     } catch (err) {
-      setAuthError("認証に失敗。メアド・パスワードを再確認してください。");
+      setAuthError("認証に失敗しました。メール・パスワードを確認してください。");
     } finally { setIsAuthProcessing(false); }
   };
 
@@ -222,7 +211,6 @@ const App = () => {
     try {
       await signOut(auth);
       setUser(null);
-      setTextbooks([]);
       setIsLogoutModalOpen(false);
     } catch (e) { window.location.reload(); }
   };
@@ -236,23 +224,21 @@ const App = () => {
     if (dlt === 0) return;
     try {
       const batch = writeBatch(db);
-      batch.update(doc(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
-      batch.set(doc(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'dailyLogs', getTodayStr()), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
-      batch.update(doc(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: getTodayStr() });
+      batch.update(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
+      batch.set(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'dailyLogs', getTodayStr()), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
+      batch.update(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: getTodayStr() });
       await batch.commit();
-    } catch (e) { setSyncError("保存失敗: ネットを確認してください"); }
+    } catch (e) { setSyncError("保存失敗"); }
   };
 
   const moveTextbook = async (index, direction) => {
     if (!user) return;
     const targetIndex = index + direction;
     if (targetIndex < 0 || targetIndex >= textbooks.length) return;
-    try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
-      batch.update(doc(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
-      await batch.commit();
-    } catch (e) { setSyncError("移動失敗"); }
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
+    batch.update(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
+    await batch.commit();
   };
 
   const handleSave = async (e) => {
@@ -267,29 +253,29 @@ const App = () => {
     };
     setIsModalOpen(false);
     try {
-      if (editingBookId) await updateDoc(doc(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'textbooks', editingBookId), bookData);
-      else await addDoc(collection(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'textbooks'), bookData);
+      if (editingBookId) await updateDoc(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', editingBookId), bookData);
+      else await addDoc(collection(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks'), bookData);
       setEditingBookId(null);
       setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
-    } catch (err) { setSyncError("教材操作失敗"); }
+    } catch (err) { setSyncError("教材操作に失敗しました"); }
   };
 
-  if (loading) return <div className="min-h-screen bg-white flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-indigo-400" /></div>;
+  if (loading) return <div className="min-h-screen bg-white flex items-center justify-center font-sans"><Loader2 className="w-8 h-8 animate-spin text-indigo-400" /></div>;
 
-  // --- ログイン画面 ---
+  // --- ログイン・新規登録画面 ---
   if (!user) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans">
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans text-slate-900">
         <style dangerouslySetInnerHTML={{ __html: `input { font-size: 16px !important; }` }} />
         <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl p-8 text-center border border-slate-200">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
-          <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter text-center">CPA Tracker</h1>
-          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">{isLoginMode ? 'Login to Master Sync' : 'Create Shared Account'}</p>
+          <h1 className="text-2xl font-black mb-2 font-mono tracking-tighter">CPA Tracker</h1>
+          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest">{isLoginMode ? 'Login to Shared Workspace' : 'Create Master Account'}</p>
           <form onSubmit={handleAuth} className="space-y-4">
             <input required type="email" placeholder="メールアドレス" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 font-bold outline-none block" value={authEmail} onChange={e => setAuthEmail(e.target.value)} />
             <input required type="password" placeholder="パスワード" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 font-bold outline-none block" value={authPassword} onChange={e => setAuthPassword(e.target.value)} />
             {authError && <div className="text-red-500 text-[10px] font-bold py-1 text-left">{authError}</div>}
-            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-xl py-4 font-black text-sm shadow-xl active:scale-95 mt-4 transition-all">{isAuthProcessing ? '接続中...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
+            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all">{isAuthProcessing ? '接続中...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
           </form>
           <button type="button" onClick={() => { setIsLoginMode(!isLoginMode); setAuthError(""); }} className="mt-8 text-[11px] font-black text-indigo-600 uppercase tracking-wider block w-full text-center">{isLoginMode ? 'New here? Create Account' : 'Back to Login'}</button>
         </div>
@@ -297,6 +283,7 @@ const App = () => {
     );
   }
 
+  // --- メイン画面 ---
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans overflow-x-hidden">
       <style dangerouslySetInnerHTML={{ __html: `input { font-size: 16px !important; user-select: text !important; }` }} />
@@ -305,11 +292,13 @@ const App = () => {
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 px-3 py-2 shadow-sm">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           <div className="flex-1 bg-indigo-900 p-2 rounded-xl border border-indigo-700 flex items-start gap-2 shadow-inner overflow-hidden">
-            <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Support" className="w-8 h-8 bg-white/10 rounded-lg shrink-0" />
+            <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0">
+               <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Support" className="w-6 h-6" />
+            </div>
             <p className="text-[10px] font-bold text-white leading-tight truncate">{MASCOT_MESSAGES[Math.floor(time.getMinutes() / 4) % MASCOT_MESSAGES.length]}</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={awakenNetwork} className={`p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-slate-400 active:scale-90 ${isSyncing ? 'animate-spin text-indigo-600' : ''}`}><RefreshCw className="w-4 h-4" /></button>
+            <button onClick={forceServerSync} className={`p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-slate-400 active:scale-90 transition-all ${isSyncing ? 'animate-spin text-indigo-600' : ''}`} title="強制同期"><RefreshCw className="w-4 h-4" /></button>
             <div className="flex flex-col items-end bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shadow-inner shrink-0 font-black">
                <div className="text-[11px] text-slate-800 font-mono tracking-tighter leading-none mb-1">{time.toLocaleTimeString('ja-JP', { hour12: false })}</div>
                <div className="text-[8px] text-slate-400 leading-none">{getTodayStr().replace(/-/g, '/')}({getDayName(getTodayStr())})</div>
@@ -320,24 +309,17 @@ const App = () => {
       </div>
 
       <main className="max-w-5xl w-full mx-auto p-3 sm:p-4 flex-grow pb-48">
+        {/* PROGRESS CARDS */}
         <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 text-center font-black">
           <div className="bg-slate-900 text-white p-3 rounded-2xl shadow-lg border-b-4 border-slate-800"><div className="text-[8px] text-slate-400 uppercase mb-1">残ノルマ</div><div className="text-xl sm:text-2xl truncate">{remainingWeeklyTarget}P</div></div>
-          <div className="bg-white border border-slate-100 p-3 rounded-2xl shadow-sm border-b-4 border-slate-50">
-            <div className="text-[8px] text-indigo-600 uppercase mb-1 font-black">今日進捗</div>
-            <div className="flex items-center justify-center gap-1"><span className="text-xl sm:text-2xl">{todayStudied}P</span><button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-0.5 bg-indigo-50 text-indigo-600 rounded active:scale-90"><Plus className="w-3 h-3" /></button></div>
-          </div>
-          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700"><div className="text-white/60 text-[8px] uppercase mb-1 text-nowrap font-black">全体進捗</div><div className="text-xl sm:text-2xl">{totalProgress.percent}%</div></div>
+          <div className="bg-white border border-slate-100 p-3 rounded-2xl shadow-sm border-b-4 border-slate-50"><div className="text-[8px] text-indigo-600 uppercase mb-1">今日進捗</div><div className="text-xl sm:text-2xl">{todayStudied}P</div></div>
+          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700"><div className="text-white/60 text-[8px] uppercase mb-1 text-nowrap">全体進捗</div><div className="text-xl sm:text-2xl">{totalProgress.percent}%</div></div>
         </div>
 
-        <div className="flex items-center justify-between gap-3 mb-6">
-          <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
-            <div className="flex flex-col"><span className="text-[8px] font-black text-slate-400 uppercase">週間目標</span>
-              <div className="flex items-center gap-1"><input type="number" value={weeklyGoalBase} onChange={(e) => setWeeklyGoalBase(parseInt(e.target.value || 0))} className="w-12 text-[12px] font-black text-indigo-600 outline-none bg-transparent" /><span className="text-[9px] font-bold text-slate-300">P/w</span></div>
-            </div>
-          </div>
-          <button onClick={() => { setEditingBookId(null); setForm({title:'',totalPages:'',currentPage:'',coverUrl:''}); setIsModalOpen(true); }} className="bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-lg active:scale-95 flex items-center gap-2 font-black text-xs text-nowrap"><Plus className="w-4 h-4" /> 教材追加</button>
-        </div>
+        {/* ADD BUTTON */}
+        <button onClick={() => { setEditingBookId(null); setForm({title:'',totalPages:'',currentPage:'',coverUrl:''}); setIsModalOpen(true); }} className="w-full bg-indigo-600 text-white py-4 rounded-2xl shadow-lg font-black flex items-center justify-center gap-2 mb-6 active:scale-95 transition-all"><Plus className="w-5 h-5" /> 教材を追加</button>
 
+        {/* TEXTBOOK LIST */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {textbooks.map((b, idx) => {
             const prog = Math.round((Number(b.currentPage) / (Number(b.totalPages) || 1)) * 100);
@@ -376,12 +358,12 @@ const App = () => {
       {/* SYNC & DEBUG STATUS (常設コンソール) */}
       <div className="fixed bottom-4 left-4 right-4 flex flex-col gap-1 pointer-events-none z-[100]">
         <div className="flex items-center justify-between">
-          <div className={`bg-white/95 px-3 py-1.5 rounded-full border border-slate-100 shadow-lg flex items-center gap-2 ${isFromCache ? 'border-amber-300' : 'border-indigo-100'}`}>
-            {!isFromCache ? <Wifi className="w-3.5 h-3.5 text-indigo-600" /> : <WifiOff className="w-3.5 h-3.5 text-amber-500 animate-pulse" />}
-            <span className={`text-[8px] font-black uppercase ${!isFromCache ? 'text-indigo-600' : 'text-amber-600'}`}>{!isFromCache ? 'Online: Cloud' : 'Offline: Cached'}</span>
+          <div className={`bg-white/95 px-3 py-1.5 rounded-full border border-slate-100 shadow-lg flex items-center gap-2`}>
+            {dataOrigin === "Server" ? <Wifi className="w-3.5 h-3.5 text-indigo-600" /> : <WifiOff className="w-3.5 h-3.5 text-amber-500 animate-pulse" />}
+            <span className={`text-[8px] font-black uppercase ${dataOrigin === "Server" ? 'text-indigo-600' : 'text-amber-600'}`}>Status: {dataOrigin}</span>
           </div>
           <div className="bg-indigo-600 px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 text-[8px] font-black text-white">
-             {VERSION} | Data:{textbooks.length} | UID:{user?.uid.slice(-8).toUpperCase()}
+             {VERSION} | UID:{user?.uid.slice(-8).toUpperCase()}
           </div>
         </div>
         
@@ -397,13 +379,13 @@ const App = () => {
 
         <div className="flex items-center justify-center bg-white/80 rounded-lg px-2 py-0.5 border border-slate-100 shadow-sm">
            <Activity className="w-2 h-2 text-indigo-400 mr-1" />
-           <span className="text-[6px] font-bold text-slate-400 font-mono tracking-tighter uppercase">ADDR: /artifacts/{MASTER_DB_ID}/...</span>
+           <span className="text-[6px] font-bold text-slate-400 font-mono tracking-tighter uppercase">ADDR: /artifacts/{MASTER_DB_PATH}/...</span>
         </div>
       </div>
 
-      {/* 教材追加・編集モーダル */}
+      {/* モーダル類 */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto text-slate-900">
           <div className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl p-8 max-h-[90vh] overflow-y-auto border border-slate-100">
             <h2 className="text-xl font-black text-center mb-8">{editingBookId ? '教材を編集' : '教材を追加'}</h2>
             <form onSubmit={handleSave} className="space-y-5 text-left">
@@ -422,24 +404,24 @@ const App = () => {
         </div>
       )}
 
-      {/* ログアウト確認モーダル (復活) */}
+      {/* ログアウト確認モーダル */}
       {isLogoutModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
-          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
-            <h3 className="font-black text-lg mb-2 text-slate-800">ログアウトしますか？</h3>
+          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200 text-slate-900">
+            <h3 className="font-black text-lg mb-2">ログアウトしますか？</h3>
             <p className="text-[11px] text-slate-400 mb-8 font-bold">データはクラウドに安全に保存されています。</p>
             <div className="flex gap-3"><button onClick={() => setIsLogoutModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={handleLogout} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">ログアウト</button></div>
           </div>
         </div>
       )}
 
-      {/* 削除確認モーダル (復活) */}
+      {/* 削除確認モーダル */}
       {deleteConfirmId && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
-          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
-            <h3 className="font-black text-lg mb-2 text-slate-800">教材を削除しますか？</h3>
+          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200 text-slate-900">
+            <h3 className="font-black text-lg mb-2">教材を削除しますか？</h3>
             <p className="text-[11px] text-slate-400 mb-8 font-bold text-balance">この教材の記録が完全に消去されます。</p>
-            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', MASTER_DB_ID, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除する</button></div>
+            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除する</button></div>
           </div>
         </div>
       )}
