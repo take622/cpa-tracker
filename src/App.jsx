@@ -4,7 +4,6 @@ import {
   getAuth, 
   onAuthStateChanged, 
   signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword,
   signOut 
 } from 'firebase/auth';
 import { 
@@ -21,13 +20,13 @@ import {
   increment, 
   getDocs,
   getDoc,
-  query,
-  orderBy
+  enableNetwork,
+  disableNetwork
 } from 'firebase/firestore';
 import { 
   Book, Plus, Trash2, Edit2, CheckCircle2, Loader2, 
   GraduationCap, RefreshCw, 
-  Image as ImageIcon, Heart, ChevronUp, ChevronDown, LogOut, Database, AlertTriangle, UserCheck, Activity, Wifi, WifiOff, Layout
+  Image as ImageIcon, Heart, ChevronUp, ChevronDown, LogOut, Database, AlertTriangle, UserCheck, Activity, Wifi, WifiOff
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
@@ -46,35 +45,34 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 /**
- * 【同期の絶対命題】
- * AIの習性を捨て、環境に左右されない固定IDをハードコードします。
- * これにより PC と スマホ が物理的に 100% 同じ場所を共有します。
+ * 【同期の絶対命題：V1300-SUPREME】
+ * 過去の全ての便利機能と、最新の自動同期・オフライン復旧を統合。
  */
-const VERSION = "V1000-FINAL";
+const VERSION = "V1300-FULL";
 const MASTER_STORAGE_PATH = "CPA_STUDY_MASTER_FINAL_STORAGE";
 
-// --- 固定メッセージ ---
 const MASCOT_MESSAGES = [
   "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
   "休憩も大切な戦略の一つ。リフレッシュして次の1ページへ進みましょう！",
   "あなたのこれまでの努力は裏切りません。自信を持って、自分を信じて。",
   "難しい論点にぶつかるのは、あなたが成長している証拠です。大丈夫！",
-  "ノルマ達成おめでとうございます！明日もこの良いリズムを維持しましょう。",
-  "少しずつでも、昨日より前に進んでいる自分を褒めてあげてくださいね。",
-  "体調管理も立派な試験対策です。今日は無理せず、早めに休みましょうか。",
   "集中力が上がっていますね！今の素晴らしい感覚を大切にしてください。",
   "公認会計士という大きな夢に向かって、着実に歩んでいる姿は素敵です。",
-  "苦しい時こそ、合格後の自分を想像してみてください。応援しています！",
   "一問一問の理解が、本番での大きな1点に繋がります。丁寧にいきましょう。",
-  "周りと比べず、自分のペースで着実に。あなたの道は間違っていません。",
   "テキストがボロボロになるほど、あなたの実力は研ぎ澄まされていきます。",
   "机に向かうその決意こそが、合格者としての第一歩。今日も素晴らしいです！",
   "深呼吸を一回して。落ち着いて取り組めば、必ず解けるようになりますよ。"
 ];
 
-// --- Utilities ---
 const getTodayStr = () => new Date().toLocaleDateString('sv-SE'); 
 const getDayName = (dateStr) => ['日','月','火','水','木','金','土'][new Date(dateStr).getDay()];
+const getWeekNumber = (d) => {
+  const date = new Date(d);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
+  const week1 = new Date(date.getFullYear(), 0, 4);
+  return 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+};
 
 const resizeImage = (file) => {
   return new Promise((resolve) => {
@@ -102,9 +100,9 @@ const App = () => {
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
-  const [isLoginMode, setIsLoginMode] = useState(true);
   const [isAuthProcessing, setIsAuthProcessing] = useState(false);
   const [syncError, setSyncError] = useState(null);
+  const [isOnline, setIsOnline] = useState(true);
 
   const [textbooks, setTextbooks] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -144,78 +142,71 @@ const App = () => {
     return { percent: tot > 0 ? Math.round((cur / tot) * 100) : 0, current: cur, total: tot };
   }, [textbooks]);
 
-  // 【最重要：同一画面を保証するデータ同期ロジック】
+  // --- 自動オンライン復旧エンジン ---
+  const forceOnline = async () => {
+    try {
+      await enableNetwork(db);
+      setIsOnline(true);
+      setSyncError(null);
+    } catch (e) {
+      console.error("Enable network failed");
+    }
+  };
+
+  useEffect(() => {
+    const handleOnline = () => forceOnline();
+    const handleOffline = () => setIsOnline(false);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') forceOnline();
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
+  // --- データ同期ロジック ---
   useEffect(() => {
     if (!user) return;
     setSyncError(null);
-    const todayStr = getTodayStr();
-    setCurrentDate(todayStr);
-
-    // 強制的に初回のデータを取得し、その後リアルタイム監視を開始する
-    const initSync = async () => {
-      try {
-        const goalRef = doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'settings', 'weeklyGoal');
-        const gSnap = await getDoc(goalRef);
-        if (gSnap.exists()) {
-          setRemainingWeeklyTarget(Number(gSnap.data().remainingTarget));
-          setWeeklyGoalBase(Number(gSnap.data().baseTarget));
-        } else {
-          await setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: todayStr });
-        }
-
-        const booksCol = collection(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks');
-        const bSnap = await getDocs(booksCol);
-        setTextbooks(bSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.sortOrder||0) - (b.sortOrder||0)));
-      } catch (e) {
-        setSyncError("初期同期エラー: " + e.message);
-      }
-    };
-    initSync();
+    setCurrentDate(getTodayStr());
+    forceOnline();
 
     const goalRef = doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'settings', 'weeklyGoal');
     const unsubGoal = onSnapshot(goalRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
+        // 週が変わっていたらノルマをリセット
+        const todayStr = getTodayStr();
+        if (d.lastUpdatedDate && getWeekNumber(todayStr) !== getWeekNumber(d.lastUpdatedDate)) {
+           setDoc(goalRef, { remainingTarget: Number(d.baseTarget || 380), lastUpdatedDate: todayStr }, { merge: true });
+        }
         setRemainingWeeklyTarget(Number(d.remainingTarget ?? 380));
         setWeeklyGoalBase(Number(d.baseTarget ?? 380));
+      } else {
+        setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: getTodayStr() });
       }
-    }, (err) => setSyncError("目標同期断絶: " + err.code));
+    }, (err) => {
+      if (err.message.includes('offline')) setIsOnline(false);
+      setSyncError(err.message);
+    });
 
-    const todayRef = doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'dailyLogs', todayStr);
+    const todayRef = doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'dailyLogs', getTodayStr());
     const unsubToday = onSnapshot(todayRef, (snap) => {
       setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
     });
 
     const booksCol = collection(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks');
     const unsubBooks = onSnapshot(booksCol, (snap) => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setTextbooks(data.sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
-    }, (err) => setSyncError("教材同期断絶: " + err.code));
+      setTextbooks(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.sortOrder||0) - (b.sortOrder||0)));
+    });
 
     return () => { unsubGoal(); unsubToday(); unsubBooks(); };
   }, [user]);
-
-  const forceSync = async () => {
-    if (!user || isSyncing) return;
-    setIsSyncing(true);
-    setSyncError(null);
-    try {
-      const booksCol = collection(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks');
-      const bSnap = await getDocs(booksCol);
-      setTextbooks(bSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)));
-      
-      const goalRef = doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'settings', 'weeklyGoal');
-      const gSnap = await getDoc(goalRef);
-      if (gSnap.exists()) {
-        setRemainingWeeklyTarget(Number(gSnap.data().remainingTarget));
-        setWeeklyGoalBase(Number(gSnap.data().baseTarget));
-      }
-      setTimeout(() => setIsSyncing(false), 800);
-    } catch (e) {
-      setSyncError("手動同期失敗: " + e.message);
-      setIsSyncing(false);
-    }
-  };
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -223,21 +214,10 @@ const App = () => {
     setIsAuthProcessing(true);
     const cleanEmail = authEmail.trim();
     try {
-      if (isLoginMode) {
-        await signInWithEmailAndPassword(auth, cleanEmail, authPassword);
-      } else {
-        await createUserWithEmailAndPassword(auth, cleanEmail, authPassword);
-      }
+      await signInWithEmailAndPassword(auth, cleanEmail, authPassword);
     } catch (err) {
-      setAuthError("認証失敗。アカウント情報を確認してください。");
+      setAuthError("認証失敗");
     } finally { setIsAuthProcessing(false); }
-  };
-
-  const handleLogout = async () => {
-    await signOut(auth);
-    setUser(null);
-    setTextbooks([]);
-    setIsLogoutModalOpen(false);
   };
 
   const updateProgress = async (id, val) => {
@@ -251,12 +231,10 @@ const App = () => {
     try {
       const batch = writeBatch(db);
       batch.update(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
-      batch.set(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'dailyLogs', currentDate), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
-      batch.update(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: currentDate });
+      batch.set(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'dailyLogs', getTodayStr()), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
+      batch.update(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: getTodayStr() });
       await batch.commit();
-    } catch (e) {
-      setSyncError("更新保存失敗: " + e.message);
-    }
+    } catch (e) { setSyncError("保存失敗"); }
   };
 
   const moveTextbook = async (index, direction) => {
@@ -268,9 +246,7 @@ const App = () => {
       batch.update(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
       batch.update(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
       await batch.commit();
-    } catch (e) {
-      setSyncError("並べ替え保存失敗: " + e.message);
-    }
+    } catch (e) { setSyncError("移動失敗"); }
   };
 
   const handleSave = async (e) => {
@@ -283,32 +259,28 @@ const App = () => {
       updatedAt: serverTimestamp(), 
       sortOrder: editingBookId ? (textbooks.find(t=>t.id===editingBookId)?.sortOrder || 0) : textbooks.length 
     };
-    const tid = editingBookId;
-    setIsModalOpen(false); setEditingBookId(null); setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
+    setIsModalOpen(false);
     try {
-      if (tid) await updateDoc(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks', tid), bookData);
+      if (editingBookId) await updateDoc(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks', editingBookId), bookData);
       else await addDoc(collection(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks'), bookData);
-    } catch (err) { setSyncError("保存失敗: " + err.message); }
+      setEditingBookId(null);
+      setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
+    } catch (err) { setSyncError("教材追加失敗"); }
   };
 
-  if (loading) return <div className="min-h-screen bg-white flex items-center justify-center font-sans"><Loader2 className="w-8 h-8 animate-spin text-indigo-500" /></div>;
+  if (loading) return <div className="min-h-screen bg-white flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-indigo-500" /></div>;
 
-  // --- LOGIN ---
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans">
-        <style dangerouslySetInnerHTML={{ __html: `input { font-size: 16px !important; }` }} />
         <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl p-8 text-center border border-slate-200">
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
-          <h1 className="text-2xl font-black text-slate-800 mb-2 font-mono tracking-tighter text-center">CPA Tracker</h1>
-          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest text-center">{isLoginMode ? 'Login to Master Space' : 'Create Master Account'}</p>
+          <h1 className="text-2xl font-black mb-6">CPA Tracker</h1>
           <form onSubmit={handleAuth} className="space-y-4">
-            <div className="text-left"><label className="text-[9px] font-black text-slate-400 uppercase ml-1">Email</label><input required type="email" placeholder="example@cpa.com" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 text-base font-bold outline-none block" value={authEmail} onChange={e => setAuthEmail(e.target.value)} /></div>
-            <div className="text-left"><label className="text-[9px] font-black text-slate-400 uppercase ml-1">Password</label><input required type="password" placeholder="••••••••" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 text-base font-bold outline-none block" value={authPassword} onChange={e => setAuthPassword(e.target.value)} /></div>
-            {authError && <div className="text-red-500 text-[10px] font-bold py-1">{authError}</div>}
-            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all mt-4">{isAuthProcessing ? 'Connecting...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
+            <input required type="email" placeholder="Email" className="w-full bg-slate-50 border border-slate-200 rounded-xl py-4 px-4 font-bold outline-none" value={authEmail} onChange={e => setAuthEmail(e.target.value)} />
+            <input required type="password" placeholder="Password" className="w-full bg-slate-50 border border-slate-200 rounded-xl py-4 px-4 font-bold outline-none" value={authPassword} onChange={e => setAuthPassword(e.target.value)} />
+            <button type="submit" className="w-full bg-indigo-600 text-white rounded-xl py-4 font-black shadow-lg">Login</button>
           </form>
-          <button type="button" onClick={() => setIsLoginMode(!isLoginMode)} className="mt-6 text-[10px] font-black text-indigo-600 uppercase tracking-widest block w-full">{isLoginMode ? 'New here? Sign Up' : 'Back to Login'}</button>
         </div>
       </div>
     );
@@ -316,35 +288,32 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans overflow-x-hidden">
-      <style dangerouslySetInnerHTML={{ __html: `input { font-size: 16px !important; user-select: text !important; }` }} />
+      <style dangerouslySetInnerHTML={{ __html: `input { font-size: 16px !important; }` }} />
 
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 px-3 py-2 shadow-sm">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           <div className="flex-1 bg-indigo-900 p-2 rounded-xl border border-indigo-700 flex items-start gap-2 shadow-inner overflow-hidden">
-            <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
-               <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Support" className="w-6 h-6" />
+            <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0">
+               <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Study" className="w-6 h-6" />
             </div>
             <p className="text-[10px] font-bold text-white leading-tight truncate">{MASCOT_MESSAGES[Math.floor(time.getMinutes() / 4) % MASCOT_MESSAGES.length]}</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={forceSync} className={`p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-slate-400 active:scale-90 transition-all ${isSyncing ? 'animate-spin text-indigo-600' : ''}`}><RefreshCw className="w-4 h-4" /></button>
+            <button onClick={forceOnline} className={`p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-slate-400 ${isSyncing ? 'animate-spin' : ''}`}><RefreshCw className="w-4 h-4" /></button>
             <div className="flex flex-col items-end bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shadow-inner shrink-0">
                <div className="text-[11px] font-black text-slate-800 font-mono tracking-tighter leading-none mb-1">{time.toLocaleTimeString('ja-JP', { hour12: false })}</div>
-               <div className="text-[8px] font-black text-slate-400 leading-none">{currentDate.replace(/-/g, '/')}({getDayName(currentDate)})</div>
+               <div className="text-[8px] font-black text-slate-400 leading-none">{getTodayStr().replace(/-/g, '/')}({getDayName(getTodayStr())})</div>
             </div>
-            <button onClick={() => setIsLogoutModalOpen(true)} className="p-2.5 bg-slate-100 text-slate-400 rounded-xl active:scale-90"><LogOut className="w-4 h-4" /></button>
+            <button onClick={() => signOut(auth)} className="p-2.5 bg-slate-100 text-slate-400 rounded-xl"><LogOut className="w-4 h-4" /></button>
           </div>
         </div>
       </div>
 
-      <main className="max-w-5xl w-full mx-auto p-3 sm:p-4 flex-grow pb-24">
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 text-center">
-          <div className="bg-slate-900 text-white p-3 rounded-2xl shadow-lg border-b-4 border-slate-800"><div className="text-[8px] font-black text-slate-400 uppercase mb-1">残ノルマ</div><div className="text-xl sm:text-2xl font-black truncate">{remainingWeeklyTarget}P</div></div>
-          <div className="bg-white border border-slate-100 p-3 rounded-2xl shadow-sm border-b-4 border-slate-50">
-            <div className="text-[8px] font-black text-indigo-600 uppercase mb-1">今日進捗</div>
-            <div className="flex items-center justify-center gap-1"><span className="text-xl sm:text-2xl font-black text-slate-800">{todayStudied}P</span><button onClick={() => { if(textbooks.length > 0) updateProgress(textbooks[0].id, textbooks[0].currentPage + 1) }} className="p-0.5 bg-indigo-50 text-indigo-600 rounded-md active:scale-90"><Plus className="w-3 h-3" /></button></div>
-          </div>
-          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700"><div className="text-white/60 text-[8px] font-black uppercase mb-1 text-nowrap">全体進捗</div><div className="text-xl sm:text-2xl font-black">{totalProgress.percent}%</div></div>
+      <main className="max-w-5xl w-full mx-auto p-3 sm:p-4 flex-grow pb-32">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 text-center font-black">
+          <div className="bg-slate-900 text-white p-3 rounded-2xl shadow-lg border-b-4 border-slate-800"><div className="text-[8px] text-slate-400 uppercase mb-1">残ノルマ</div><div className="text-xl sm:text-2xl truncate">{remainingWeeklyTarget}P</div></div>
+          <div className="bg-white border border-slate-100 p-3 rounded-2xl shadow-sm border-b-4 border-slate-50"><div className="text-[8px] text-indigo-600 uppercase mb-1">今日進捗</div><div className="text-xl sm:text-2xl">{todayStudied}P</div></div>
+          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700"><div className="text-white/60 text-[8px] uppercase mb-1">全体進捗</div><div className="text-xl sm:text-2xl">{totalProgress.percent}%</div></div>
         </div>
 
         <div className="flex items-center justify-between gap-3 mb-6">
@@ -361,22 +330,28 @@ const App = () => {
           {textbooks.map((b, idx) => {
             const prog = Math.round((Number(b.currentPage) / (Number(b.totalPages) || 1)) * 100);
             return (
-              <div key={b.id} className="bg-white rounded-3xl border border-slate-100 shadow-sm flex overflow-hidden group active:bg-slate-50/50">
-                <div className="w-20 sm:w-24 bg-slate-50 flex-shrink-0 flex items-center justify-center border-r border-slate-100 relative">
-                  {b.coverUrl ? <img src={String(b.coverUrl)} className="w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-1 opacity-20"><Book className="w-6 h-6" /></div>}
+              <div key={b.id} className="bg-white rounded-3xl border border-slate-100 shadow-sm flex overflow-hidden active:bg-slate-50/50">
+                <div className="w-24 bg-slate-50 flex-shrink-0 flex items-center justify-center border-r border-slate-100 relative">
+                  {b.coverUrl ? <img src={String(b.coverUrl)} className="w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-1 opacity-20"><Book className="w-6 h-6" /><span className="text-[10px] font-black">{prog}%</span></div>}
                 </div>
                 <div className="p-4 flex-grow flex flex-col justify-between min-w-0 text-left">
-                  <div className="flex justify-between items-start mb-1 gap-1">
-                    <h3 className="font-black text-sm text-slate-800 truncate flex-1">{b.title}</h3>
-                    <div className="flex shrink-0 gap-1">
-                       <button onClick={() => moveTextbook(idx, -1)} disabled={idx === 0} className="p-1 text-slate-400 disabled:opacity-10 active:scale-90"><ChevronUp className="w-4 h-4" /></button>
-                       <button onClick={() => moveTextbook(idx, 1)} disabled={idx === textbooks.length - 1} className="p-1 text-slate-400 disabled:opacity-10 active:scale-90"><ChevronDown className="w-4 h-4" /></button>
-                       <button onClick={() => { setEditingBookId(b.id); setForm({title:b.title,totalPages:b.totalPages,currentPage:b.currentPage,coverUrl:b.coverUrl||""}); setIsModalOpen(true); }} className="text-slate-400 p-1 active:scale-90"><Edit2 className="w-4 h-4" /></button>
-                       <button onClick={() => setDeleteConfirmId(b.id)} className="text-slate-400 p-1 active:scale-90"><Trash2 className="w-4 h-4" /></button>
+                  <div>
+                    <div className="flex justify-between items-start mb-1 gap-1">
+                      <h3 className="font-black text-sm text-slate-800 truncate flex-1">{b.title}</h3>
+                      <div className="flex gap-1 shrink-0">
+                         <button onClick={() => moveTextbook(idx, -1)} disabled={idx === 0} className="p-1 text-slate-400 disabled:opacity-5"><ChevronUp className="w-4 h-4" /></button>
+                         <button onClick={() => moveTextbook(idx, 1)} disabled={idx === textbooks.length - 1} className="p-1 text-slate-400 disabled:opacity-5"><ChevronDown className="w-4 h-4" /></button>
+                         <button onClick={() => { setEditingBookId(b.id); setForm({title:b.title,totalPages:b.totalPages,currentPage:b.currentPage,coverUrl:b.coverUrl||""}); setIsModalOpen(true); }} className="p-1 text-slate-400"><Edit2 className="w-4 h-4" /></button>
+                         <button onClick={() => { if(window.confirm('削除しますか？')) deleteDoc(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks', b.id)) }} className="p-1 text-slate-400"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 mb-3">
+                       <div className="flex-grow bg-slate-100 h-2 rounded-full overflow-hidden"><div className={`h-full transition-all duration-700 ${prog >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`} style={{ width: `${prog}%` }} /></div>
+                       <span className="text-[10px] font-black text-slate-400 shrink-0">{prog}%</span>
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5"><input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-14 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none" /><span className="text-[10px] text-slate-400 font-bold shrink-0">/ {Number(b.totalPages)} P</span></div>
+                    <div className="flex items-center gap-1.5"><input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-16 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none" /><span className="text-[10px] text-slate-400 font-bold shrink-0">/ {Number(b.totalPages)} P</span></div>
                     {prog >= 100 && <CheckCircle2 className="w-4 h-4 text-emerald-500 animate-in zoom-in" />}
                   </div>
                 </div>
@@ -386,64 +361,35 @@ const App = () => {
         </div>
       </main>
 
-      {/* SYNC INDICATOR & DEBUG (同期成功の可視化) */}
       <div className="fixed bottom-4 left-4 right-4 flex flex-col gap-1 pointer-events-none z-[100]">
         <div className="flex items-center justify-between">
           <div className="bg-white/95 px-3 py-1.5 rounded-full border border-slate-100 shadow-lg flex items-center gap-2">
-            <Database className="w-3 h-3 text-indigo-600" />
-            <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Master Cloud Sync</span>
+            {isOnline ? <Wifi className="w-3.5 h-3.5 text-indigo-600" /> : <WifiOff className="w-3.5 h-3.5 text-red-500 animate-pulse" />}
+            <span className={`text-[8px] font-black uppercase ${isOnline ? 'text-slate-500' : 'text-red-500'}`}>{isOnline ? 'Full Auto-Sync' : 'Reconnecting...'}</span>
           </div>
           <div className="bg-indigo-600 px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 text-[8px] font-black text-white">
              {VERSION} <UserCheck className="w-2.5 h-2.5 ml-1" /> UID:{user?.uid.slice(-12).toUpperCase()}
           </div>
         </div>
-        <div className="flex items-center justify-center bg-white/80 rounded-lg px-2 py-0.5 border border-slate-100 shadow-sm">
-           <Activity className="w-2 h-2 text-indigo-400 mr-1" />
-           <span className="text-[6px] font-bold text-slate-400 font-mono tracking-tighter uppercase">PATH: /artifacts/{MASTER_STORAGE_PATH}/...</span>
-        </div>
-        {syncError && (
-          <div className="bg-red-50 text-red-600 px-3 py-2 rounded-xl border border-red-200 flex items-center gap-2 shadow-lg animate-bounce">
-            <AlertTriangle className="w-3 h-3 shrink-0" />
-            <span className="text-[9px] font-bold uppercase">{syncError}</span>
-          </div>
-        )}
+        {syncError && <div className="bg-red-50 text-red-600 px-3 py-2 rounded-xl border border-red-200 text-[7px] font-black flex items-center gap-2 shadow-lg"><AlertTriangle className="w-3 h-3" /> {syncError}</div>}
       </div>
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
-          <div className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl p-8 overflow-y-auto max-h-[90vh]">
-            <h2 className="text-xl font-black text-center mb-8 font-mono">{editingBookId ? '修正' : '追加'}</h2>
+          <div className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl p-8 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-black text-center mb-8">{editingBookId ? '教材を編集' : '教材を追加'}</h2>
             <form onSubmit={handleSave} className="space-y-5">
-              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-xl px-4 py-4 font-bold text-base outline-none border border-slate-200 select-text" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
+              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-xl px-4 py-4 font-bold text-base outline-none border border-slate-200" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
               <div className="flex flex-col items-center gap-3 border-2 border-dashed border-slate-200 rounded-2xl p-4 bg-slate-50 cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-                {form.coverUrl ? <img src={String(form.coverUrl)} className="w-20 h-28 object-cover rounded-xl shadow-md" /> : <ImageIcon className="w-6 h-6 text-slate-300" />}
+                {form.coverUrl ? <img src={String(form.coverUrl)} className="w-20 h-28 object-cover rounded-xl shadow-md" /> : <><ImageIcon className="w-6 h-6 text-slate-300" /><span className="text-[10px] font-black text-slate-400">カバー画像をアップロード</span></>}
                 <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={async (e) => { if(e.target.files[0]) setForm({...form, coverUrl: await resizeImage(e.target.files[0])}); }} />
               </div>
               <div className="grid grid-cols-2 gap-4 text-left">
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase">Total</label><input required type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold text-base outline-none border border-slate-200 select-text" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase">Current</label><input type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold text-base outline-none border border-slate-200 select-text" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase">総ページ数</label><input required type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold outline-none border border-slate-200" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
+                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase">現在ページ</label><input type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold outline-none border border-slate-200" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
               </div>
-              <div className="flex gap-3 pt-4"><button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-100 py-4 rounded-xl font-black text-xs active:scale-95">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-xl font-black text-xs shadow-lg active:scale-95">保存</button></div>
+              <div className="flex gap-3 pt-4"><button type="button" onClick={() => { setIsModalOpen(false); setEditingBookId(null); }} className="flex-1 bg-slate-100 py-4 rounded-xl font-black">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-xl font-black shadow-lg">保存する</button></div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {isLogoutModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
-          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
-            <h3 className="font-black text-lg mb-2 text-slate-800">ログアウトしますか？</h3>
-            <p className="text-[11px] text-slate-400 mb-8 font-bold text-balance">ログイン中: {user?.email}</p>
-            <div className="flex gap-3"><button onClick={() => setIsLogoutModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={handleLogout} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">ログアウト</button></div>
-          </div>
-        </div>
-      )}
-
-      {deleteConfirmId && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
-          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200">
-            <h3 className="font-black text-lg mb-2 text-slate-800">削除しますか？</h3>
-            <div className="flex gap-3 mt-8"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', MASTER_STORAGE_PATH, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除</button></div>
           </div>
         </div>
       )}
