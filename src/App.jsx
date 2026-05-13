@@ -1,432 +1,966 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  onAuthStateChanged, 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword,
-  signOut 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  doc, 
-  setDoc, 
-  onSnapshot, 
-  updateDoc, 
-  addDoc, 
-  deleteDoc, 
-  serverTimestamp, 
-  writeBatch, 
-  increment, 
-  getDocs,
-  getDoc,
-  enableNetwork,
-  disableNetwork,
-  query,
-  limit
-} from 'firebase/firestore';
-import { 
-  Book, Plus, Trash2, Edit2, CheckCircle2, Loader2, 
-  GraduationCap, RefreshCw, 
-  Image as ImageIcon, Heart, ChevronUp, ChevronDown, LogOut, Database, AlertTriangle, UserCheck, Activity, Wifi, WifiOff, Terminal, Key, Info
-} from 'lucide-react';
+// ============================================================
+// CPA Study Tracker - App.jsx
+// Firebase Firestore リアルタイム同期版
+// FIXED_ID: CPA_ROOT_V7000 (ハードコード固定)
+// ============================================================
 
-// --- Firebase Configuration ---
+import { useState, useEffect, useRef, useCallback } from "react";
+import { initializeApp, getApps } from "firebase/app";
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from "firebase/auth";
+import {
+  getFirestore,
+  doc,
+  collection,
+  setDoc,
+  deleteDoc,
+  onSnapshot,
+  enableNetwork,
+  serverTimestamp,
+  query,
+  orderBy,
+} from "firebase/firestore";
+
+// ============================================================
+// Firebase 設定（ハードコード固定 - 絶対に変更しないこと）
+// ============================================================
 const firebaseConfig = {
   apiKey: "AIzaSyBgPwP-30BuXvuydRe6NsYJInMVMlmaWsE",
   authDomain: "cpa-tracker-a0f14.firebaseapp.com",
+  databaseURL: "https://cpa-tracker-a0f14-default-rtdb.firebaseio.com",
   projectId: "cpa-tracker-a0f14",
   storageBucket: "cpa-tracker-a0f14.firebasestorage.app",
   messagingSenderId: "77528125896",
   appId: "1:77528125896:web:13829c71b21a7870d870fd",
-  measurementId: "G-FNL3C7R07M"
+  measurementId: "G-FNL3C7R07M",
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// ============================================================
+// 定数（絶対に変更しないこと - 同期の鍵）
+// ============================================================
+const FIXED_ID = "CPA_ROOT_V7000";
+const BASE_WEEKLY_TARGET = 100;
 
-/**
- * 【同期の絶対命題：V7000-SERVER-FIRST】
- * AIの環境忖度を完全排除。
- * キャッシュ(Cached)を極力無視し、サーバー(Server)の生データを強制同期。
- */
-const VERSION = "V7000-ULTIMATE";
-const MASTER_DB_PATH = "CPA_ROOT_V7000";
+// Firebase 初期化（重複初期化防止）
+const firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp);
 
-const MASCOT_MESSAGES = [
-  "今日も一歩前進！その積み重ねが確実に合格へと繋がっていますよ。",
-  "休憩も大切な戦略の一つ。リフレッシュして次の1ページへ進みましょう！",
-  "あなたの努力は裏切りません。自分を信じて。",
-  "公認会計士という大きな夢に向かって、一歩ずつ。",
-  "一問一問の理解が、本番での大きな1点に繋がります。",
-  "机に向かうその決意こそが、合格者としての第一歩です。"
+// ============================================================
+// Firestoreパスヘルパー（UIDを受け取って毎回生成）
+// ============================================================
+const getPaths = (uid) => ({
+  settings: doc(db, `artifacts/${FIXED_ID}/users/${uid}/settings/weeklyGoal`),
+  textbook: (id) => doc(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks/${id}`),
+  textbooksCol: collection(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks`),
+  dailyLog: (date) => doc(db, `artifacts/${FIXED_ID}/users/${uid}/dailyLogs/${date}`),
+});
+
+// ============================================================
+// 励ましメッセージ
+// ============================================================
+const MESSAGES = [
+  "今日も一歩前進！合格まであと少し！",
+  "継続は力なり。君なら絶対できる！",
+  "難しい問題も、積み重ねで必ず解けるようになる！",
+  "一日一日を大切に。合格は目の前だ！",
+  "諦めなければ必ず道は開ける！",
+  "今の努力が未来の自分を救う！",
+  "休憩も大事。でも戻ってきた君は強い！",
+  "合格くんはいつも君の味方だぞ！",
+  "小さな積み重ねが大きな結果につながる！",
+  "今日の頑張りを明日の自分が感謝する！",
+  "財務諸表も最初は誰でも苦手。大丈夫！",
+  "監査論、管理会計…全部マスターしよう！",
 ];
 
-const getTodayStr = () => new Date().toLocaleDateString('sv-SE'); 
-const getDayName = (dateStr) => ['日','月','火','水','木','金','土'][new Date(dateStr).getDay()];
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
-const resizeImage = (file) => {
+// ============================================================
+// 日付ユーティリティ
+// ============================================================
+const DAY_NAMES = ["日", "月", "火", "水", "木", "金", "土"];
+
+function getTodayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function getThisMondayStr() {
+  const d = new Date();
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// ============================================================
+// 画像リサイズ（Base64）
+// ============================================================
+function resizeImage(file, maxW = 200, maxH = 200, quality = 0.7) {
   return new Promise((resolve) => {
     const reader = new FileReader();
-    reader.readAsDataURL(file);
     reader.onload = (e) => {
       const img = new Image();
-      img.src = e.target.result;
       img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 200;
-        const scale = MAX_WIDTH / img.width;
-        canvas.width = MAX_WIDTH;
-        canvas.height = img.height * scale;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.7));
+        const canvas = document.createElement("canvas");
+        let w = img.width, h = img.height;
+        if (w > maxW) { h = (h * maxW) / w; w = maxW; }
+        if (h > maxH) { w = (w * maxH) / h; h = maxH; }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", quality));
       };
+      img.src = e.target.result;
     };
+    reader.readAsDataURL(file);
   });
-};
+}
 
-const App = () => {
-  const [user, setUser] = useState(null);
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authError, setAuthError] = useState("");
-  const [isLoginMode, setIsLoginMode] = useState(true);
-  const [isAuthProcessing, setIsAuthProcessing] = useState(false);
-  const [syncError, setSyncError] = useState(null);
-  const [dataOrigin, setDataOrigin] = useState("Checking...");
+// ============================================================
+// ログイン画面（プレーンHTML構造 - iOSズーム・入力問題対策済み）
+// ============================================================
+function LoginScreen({ onLogin, onSignup }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isSignup, setIsSignup] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const [textbooks, setTextbooks] = useState([]);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingBookId, setEditingBookId] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [currentDate, setCurrentDate] = useState(getTodayStr());
-  const [time, setTime] = useState(new Date());
-
-  const [weeklyGoalBase, setWeeklyGoalBase] = useState(380);
-  const [remainingWeeklyTarget, setRemainingWeeklyTarget] = useState(380);
-  const [todayStudied, setTodayStudied] = useState(0);
-
-  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
-  const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-
-  const fileInputRef = useRef(null);
-  const [form, setForm] = useState({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
-
-  // 1. 認証監視
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-      if (!u) {
-        setTextbooks([]);
-        setDataOrigin("Offline");
-      }
-    });
-    return () => unsub();
-  }, []);
-
-  // 2. 時計
-  useEffect(() => {
-    const t = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  // 3. 【サーバー生データ強制取得エンジン】
-  const forceServerSync = async () => {
-    if (!auth.currentUser) return;
-    setIsSyncing(true);
-    setSyncError(null);
+  const handleSubmit = async () => {
+    setError("");
+    setLoading(true);
     try {
-      await enableNetwork(db);
-      // getDocsでサーバーから直接引く
-      const colRef = collection(db, 'artifacts', MASTER_DB_PATH, 'users', auth.currentUser.uid, 'textbooks');
-      const snap = await getDocs(colRef);
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setTextbooks(list.sort((a,b) => (Number(a.sortOrder)||0) - (Number(b.sortOrder)||0)));
-      setDataOrigin("Server");
+      if (isSignup) {
+        await onSignup(email, password);
+      } else {
+        await onLogin(email, password);
+      }
     } catch (e) {
-      setSyncError("Sync Failed: " + e.message);
+      const msgs = {
+        "auth/user-not-found": "メールアドレスが見つかりません",
+        "auth/wrong-password": "パスワードが間違っています",
+        "auth/email-already-in-use": "このメールアドレスは既に使用されています",
+        "auth/invalid-email": "メールアドレスの形式が正しくありません",
+        "auth/weak-password": "パスワードは6文字以上で入力してください",
+        "auth/invalid-credential": "メールアドレスまたはパスワードが間違っています",
+      };
+      setError(msgs[e.code] || "エラー: " + e.message);
     } finally {
-      setTimeout(() => setIsSyncing(false), 800);
+      setLoading(false);
     }
   };
 
-  // 4. リアルタイム・リスナー（ログイン中のみ起動）
-  useEffect(() => {
-    if (!user) return;
-    
-    setCurrentDate(getTodayStr());
-    forceServerSync(); // ログイン直後に強制リフレッシュ
-
-    const goalRef = doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'settings', 'weeklyGoal');
-    const unsubGoal = onSnapshot(goalRef, (snap) => {
-      if (snap.exists()) {
-        const d = snap.data();
-        setRemainingWeeklyTarget(Number(d.remainingTarget ?? 380));
-        setWeeklyGoalBase(Number(d.baseTarget ?? 380));
-      } else {
-        setDoc(goalRef, { remainingTarget: 380, baseTarget: 380, lastUpdatedDate: getTodayStr() });
-      }
-    });
-
-    const todayRef = doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'dailyLogs', getTodayStr());
-    const unsubToday = onSnapshot(todayRef, (snap) => {
-      setTodayStudied(snap.exists() ? Number(snap.data().pages || 0) : 0);
-    });
-
-    const booksCol = collection(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks');
-    const unsubBooks = onSnapshot(booksCol, { includeMetadataChanges: true }, (snap) => {
-      setTextbooks(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (Number(a.sortOrder)||0) - (Number(b.sortOrder)||0)));
-      setDataOrigin(snap.metadata.fromCache ? "Cached" : "Server");
-    }, (err) => setSyncError(err.message));
-
-    return () => { unsubGoal(); unsubToday(); unsubBooks(); };
-  }, [user]);
-
-  const totalProgress = useMemo(() => {
-    if (textbooks.length === 0) return { percent: 0, current: 0, total: 0 };
-    const cur = textbooks.reduce((s, b) => s + (Number(b.currentPage) || 0), 0);
-    const tot = textbooks.reduce((s, b) => s + (Number(b.totalPages) || 0), 0);
-    return { percent: tot > 0 ? Math.round((cur / tot) * 100) : 0, current: cur, total: tot };
-  }, [textbooks]);
-
-  const handleAuth = async (e) => {
-    e.preventDefault();
-    setAuthError("");
-    setIsAuthProcessing(true);
-    const email = authEmail.trim();
-    try {
-      if (isLoginMode) await signInWithEmailAndPassword(auth, email, authPassword);
-      else await createUserWithEmailAndPassword(auth, email, authPassword);
-    } catch (err) {
-      setAuthError("認証に失敗しました。メール・パスワードを確認してください。");
-    } finally { setIsAuthProcessing(false); }
+  const containerStyle = {
+    minHeight: "100vh",
+    background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "20px",
+    fontFamily: "'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif",
   };
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setUser(null);
-      setIsLogoutModalOpen(false);
-    } catch (e) { window.location.reload(); }
+  const cardStyle = {
+    background: "rgba(255,255,255,0.06)",
+    backdropFilter: "blur(20px)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: "20px",
+    padding: "40px 28px",
+    width: "100%",
+    maxWidth: "380px",
+    boxShadow: "0 25px 50px rgba(0,0,0,0.5)",
   };
 
-  const updateProgress = async (id, val) => {
-    if (!user) return;
-    const b = textbooks.find(x => x.id === id);
-    if (!b) return;
-    const newVal = Math.min(Math.max(0, parseInt(val || 0)), b.totalPages);
-    const dlt = newVal - b.currentPage;
-    if (dlt === 0) return;
-    try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', id), { currentPage: newVal, updatedAt: serverTimestamp() });
-      batch.set(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'dailyLogs', getTodayStr()), { pages: increment(dlt), updatedAt: serverTimestamp() }, { merge: true });
-      batch.update(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'settings', 'weeklyGoal'), { remainingTarget: increment(-dlt), lastUpdatedDate: getTodayStr() });
-      await batch.commit();
-    } catch (e) { setSyncError("保存失敗"); }
+  const inputStyle = {
+    width: "100%",
+    padding: "13px 14px",
+    fontSize: "16px", // iOSズーム防止（16px以上必須）
+    border: "1px solid rgba(255,255,255,0.18)",
+    borderRadius: "10px",
+    background: "rgba(255,255,255,0.08)",
+    color: "#fff",
+    outline: "none",
+    boxSizing: "border-box",
+    WebkitAppearance: "none",
   };
 
-  const moveTextbook = async (index, direction) => {
-    if (!user) return;
-    const targetIndex = index + direction;
-    if (targetIndex < 0 || targetIndex >= textbooks.length) return;
-    const batch = writeBatch(db);
-    batch.update(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', textbooks[index].id), { sortOrder: targetIndex });
-    batch.update(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', textbooks[targetIndex].id), { sortOrder: index });
-    await batch.commit();
-  };
-
-  const handleSave = async (e) => {
-    e.preventDefault(); 
-    if (!user || !form.title) return;
-    const bookData = { 
-      ...form, 
-      totalPages: Number(form.totalPages), 
-      currentPage: Number(form.currentPage), 
-      updatedAt: serverTimestamp(), 
-      sortOrder: editingBookId ? (textbooks.find(t=>t.id===editingBookId)?.sortOrder || 0) : textbooks.length 
-    };
-    setIsModalOpen(false);
-    try {
-      if (editingBookId) await updateDoc(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', editingBookId), bookData);
-      else await addDoc(collection(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks'), bookData);
-      setEditingBookId(null);
-      setForm({ title: '', totalPages: '', currentPage: '', coverUrl: '' });
-    } catch (err) { setSyncError("教材操作に失敗しました"); }
-  };
-
-  if (loading) return <div className="min-h-screen bg-white flex items-center justify-center font-sans"><Loader2 className="w-8 h-8 animate-spin text-indigo-400" /></div>;
-
-  // --- ログイン・新規登録画面 ---
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans text-slate-900">
-        <style dangerouslySetInnerHTML={{ __html: `input { font-size: 16px !important; }` }} />
-        <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl p-8 text-center border border-slate-200">
-          <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-6"><GraduationCap className="w-8 h-8 text-white" /></div>
-          <h1 className="text-2xl font-black mb-2 font-mono tracking-tighter">CPA Tracker</h1>
-          <p className="text-[10px] font-bold text-slate-400 mb-8 uppercase tracking-widest">{isLoginMode ? 'Login to Shared Workspace' : 'Create Master Account'}</p>
-          <form onSubmit={handleAuth} className="space-y-4">
-            <input required type="email" placeholder="メールアドレス" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 font-bold outline-none block" value={authEmail} onChange={e => setAuthEmail(e.target.value)} />
-            <input required type="password" placeholder="パスワード" className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-600 rounded-xl py-4 px-4 font-bold outline-none block" value={authPassword} onChange={e => setAuthPassword(e.target.value)} />
-            {authError && <div className="text-red-500 text-[10px] font-bold py-1 text-left">{authError}</div>}
-            <button type="submit" disabled={isAuthProcessing} className="w-full bg-indigo-600 text-white rounded-xl py-4 font-black text-sm shadow-xl active:scale-95 transition-all">{isAuthProcessing ? '接続中...' : (isLoginMode ? 'Login' : 'Sign Up')}</button>
-          </form>
-          <button type="button" onClick={() => { setIsLoginMode(!isLoginMode); setAuthError(""); }} className="mt-8 text-[11px] font-black text-indigo-600 uppercase tracking-wider block w-full text-center">{isLoginMode ? 'New here? Create Account' : 'Back to Login'}</button>
+  return (
+    <div style={containerStyle}>
+      <div style={cardStyle}>
+        <div style={{ textAlign: "center", marginBottom: "32px" }}>
+          <div style={{ fontSize: "52px", marginBottom: "10px" }}>📚</div>
+          <h1 style={{ color: "#fff", fontSize: "22px", fontWeight: "700", margin: "0 0 6px" }}>
+            CPA Study Tracker
+          </h1>
+          <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "13px", margin: 0 }}>
+            合格への道を、一緒に歩もう
+          </p>
         </div>
+
+        {/* タブ */}
+        <div style={{
+          display: "flex",
+          background: "rgba(0,0,0,0.3)",
+          borderRadius: "10px",
+          padding: "4px",
+          marginBottom: "24px",
+        }}>
+          {["ログイン", "新規登録"].map((label, i) => (
+            <button
+              key={i}
+              onClick={() => { setIsSignup(i === 1); setError(""); }}
+              style={{
+                flex: 1,
+                padding: "10px",
+                border: "none",
+                borderRadius: "8px",
+                cursor: "pointer",
+                fontSize: "14px",
+                fontWeight: "600",
+                background: isSignup === (i === 1) ? "rgba(99,179,237,0.9)" : "transparent",
+                color: isSignup === (i === 1) ? "#1a1a2e" : "rgba(255,255,255,0.55)",
+                transition: "all 0.2s",
+                WebkitTapHighlightColor: "transparent",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ marginBottom: "14px" }}>
+          <label style={{ display: "block", color: "rgba(255,255,255,0.65)", fontSize: "13px", marginBottom: "6px" }}>
+            メールアドレス
+          </label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="example@email.com"
+            autoComplete="email"
+            style={inputStyle}
+          />
+        </div>
+
+        <div style={{ marginBottom: "22px" }}>
+          <label style={{ display: "block", color: "rgba(255,255,255,0.65)", fontSize: "13px", marginBottom: "6px" }}>
+            パスワード
+          </label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="6文字以上"
+            autoComplete={isSignup ? "new-password" : "current-password"}
+            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+            style={inputStyle}
+          />
+        </div>
+
+        {error && (
+          <div style={{
+            background: "rgba(239,68,68,0.15)",
+            border: "1px solid rgba(239,68,68,0.35)",
+            borderRadius: "8px",
+            padding: "10px 14px",
+            color: "#fca5a5",
+            fontSize: "13px",
+            marginBottom: "14px",
+          }}>
+            {error}
+          </div>
+        )}
+
+        <button
+          onClick={handleSubmit}
+          disabled={loading}
+          style={{
+            width: "100%",
+            padding: "14px",
+            fontSize: "16px",
+            fontWeight: "700",
+            border: "none",
+            borderRadius: "10px",
+            cursor: loading ? "not-allowed" : "pointer",
+            background: loading ? "rgba(99,179,237,0.35)" : "linear-gradient(135deg, #63b3ed, #4299e1)",
+            color: "#fff",
+            boxShadow: loading ? "none" : "0 4px 15px rgba(66,153,225,0.35)",
+            WebkitTapHighlightColor: "transparent",
+          }}
+        >
+          {loading ? "処理中..." : isSignup ? "アカウント作成" : "ログイン"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ルートコンポーネント
+// ============================================================
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+    });
+    return unsub;
+  }, []);
+
+  // スマホスリープ復帰時のFirebase再接続（オフラインエラー対策）
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        enableNetwork(db).catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    const timer = setInterval(() => enableNetwork(db).catch(() => {}), 60000);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      clearInterval(timer);
+    };
+  }, []);
+
+  if (authLoading) {
+    return (
+      <div style={{
+        minHeight: "100vh",
+        background: "linear-gradient(135deg, #1a1a2e, #0f3460)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "#fff", fontSize: "18px",
+        fontFamily: "sans-serif",
+      }}>
+        読み込み中...
       </div>
     );
   }
 
-  // --- メイン画面 ---
+  if (!user) {
+    return (
+      <LoginScreen
+        onLogin={(email, pw) => signInWithEmailAndPassword(auth, email, pw)}
+        onSignup={(email, pw) => createUserWithEmailAndPassword(auth, email, pw)}
+      />
+    );
+  }
+
+  return <MainDashboard user={user} onLogout={() => signOut(auth)} />;
+}
+
+// ============================================================
+// メインダッシュボード
+// ============================================================
+function MainDashboard({ user, onLogout }) {
+  const uid = user.uid;
+
+  const [textbooks, setTextbooks] = useState([]);
+  const [weeklyGoal, setWeeklyGoal] = useState(BASE_WEEKLY_TARGET);
+  const [lastResetMonday, setLastResetMonday] = useState(null);
+  const [todayLog, setTodayLog] = useState({ pages: 0, startOfDayPages: 0 });
+  const [now, setNow] = useState(new Date());
+  const [mascotMsg, setMascotMsg] = useState("");
+  const [showMascot, setShowMascot] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("synced");
+  const [modal, setModal] = useState(null);
+  const [editTarget, setEditTarget] = useState(null);
+  const [bookForm, setBookForm] = useState({ name: "", totalPages: "", currentPage: "", imageBase64: "" });
+  const [goalForm, setGoalForm] = useState("");
+
+  const msgQueue = useRef(shuffleArray(MESSAGES));
+  const msgIndex = useRef(0);
+  const textbooksRef = useRef([]);
+  textbooksRef.current = textbooks;
+
+  // 時計
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // 合格くん自動メッセージ
+  const showNextMessage = useCallback(() => {
+    if (msgIndex.current >= msgQueue.current.length) {
+      msgQueue.current = shuffleArray(MESSAGES);
+      msgIndex.current = 0;
+    }
+    setMascotMsg(msgQueue.current[msgIndex.current++]);
+    setShowMascot(true);
+    setTimeout(() => setShowMascot(false), 4500);
+  }, []);
+
+  useEffect(() => {
+    const t = setInterval(showNextMessage, 30000);
+    return () => clearInterval(t);
+  }, [showNextMessage]);
+
+  // --- Firestore リアルタイム同期: 設定 ---
+  useEffect(() => {
+    const p = getPaths(uid);
+    const unsub = onSnapshot(
+      p.settings,
+      (snap) => {
+        if (snap.exists()) {
+          const d = snap.data();
+          setWeeklyGoal(d.target ?? BASE_WEEKLY_TARGET);
+          setLastResetMonday(d.lastResetMonday ?? null);
+        } else {
+          // 初回: 設定を作成
+          const monday = getThisMondayStr();
+          setDoc(p.settings, {
+            target: BASE_WEEKLY_TARGET,
+            lastResetMonday: monday,
+            weeklyPages: 0,
+            updatedAt: serverTimestamp(),
+          }).catch(console.error);
+        }
+      },
+      (err) => console.error("settings:", err)
+    );
+    return unsub;
+  }, [uid]);
+
+  // --- Firestore リアルタイム同期: 教材 ---
+  useEffect(() => {
+    const p = getPaths(uid);
+    const q = query(p.textbooksCol, orderBy("order", "asc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setTextbooks(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      },
+      (err) => console.error("textbooks:", err)
+    );
+    return unsub;
+  }, [uid]);
+
+  // --- Firestore リアルタイム同期: 今日のログ ---
+  useEffect(() => {
+    const p = getPaths(uid);
+    const today = getTodayStr();
+    const unsub = onSnapshot(
+      p.dailyLog(today),
+      (snap) => {
+        if (snap.exists()) {
+          setTodayLog(snap.data());
+        }
+        // 存在しない場合は textbooks ロード後に初期化する
+      },
+      (err) => console.error("dailyLog:", err)
+    );
+    return unsub;
+  }, [uid]);
+
+  // 日次ログ初期化（教材ロード後）
+  useEffect(() => {
+    if (textbooks.length === 0) return;
+    const today = getTodayStr();
+    const p = getPaths(uid);
+    // すでにログがあれば何もしない
+    if (todayLog.startOfDayPages !== undefined && todayLog.startOfDayPages > 0) return;
+
+    // 初回の場合のみ現在ページ合計をスナップショット
+    const startPages = textbooks.reduce((s, b) => s + (b.currentPage || 0), 0);
+    if (startPages > 0 && todayLog.startOfDayPages === 0) {
+      setDoc(p.dailyLog(today), {
+        pages: 0,
+        startOfDayPages: startPages,
+        updatedAt: serverTimestamp(),
+      }, { merge: true }).catch(console.error);
+    }
+  }, [textbooks.length > 0]);
+
+  // 月曜リセット
+  useEffect(() => {
+    if (lastResetMonday === null) return;
+    const monday = getThisMondayStr();
+    if (lastResetMonday !== monday) {
+      const p = getPaths(uid);
+      setDoc(p.settings, {
+        target: weeklyGoal,
+        lastResetMonday: monday,
+        weeklyPages: 0,
+        updatedAt: serverTimestamp(),
+      }, { merge: true }).catch(console.error);
+    }
+  }, [lastResetMonday]);
+
+  // --- 計算値 ---
+  const totalCurrentPages = textbooks.reduce((s, b) => s + (b.currentPage || 0), 0);
+  const todayProgress = Math.max(0, totalCurrentPages - (todayLog.startOfDayPages || 0));
+  const remainingNorma = Math.max(0, weeklyGoal - todayProgress);
+
+  // --- 教材保存（UIを即座に閉じる非同期保存）---
+  const saveBook = async () => {
+    const name = bookForm.name.trim();
+    if (!name) return;
+    const totalPages = parseInt(bookForm.totalPages) || 0;
+    const currentPage = Math.min(parseInt(bookForm.currentPage) || 0, totalPages || Infinity);
+    const p = getPaths(uid);
+
+    // 先にモーダルを閉じる
+    setModal(null);
+    setEditTarget(null);
+    setSyncStatus("saving");
+
+    try {
+      if (editTarget) {
+        await setDoc(p.textbook(editTarget.id), {
+          name, totalPages, currentPage,
+          imageBase64: bookForm.imageBase64 || editTarget.imageBase64 || "",
+          order: editTarget.order ?? Date.now(),
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      } else {
+        const newId = `book_${Date.now()}`;
+        const maxOrder = textbooks.length > 0
+          ? Math.max(...textbooks.map((b) => b.order ?? 0))
+          : 0;
+        await setDoc(p.textbook(newId), {
+          name, totalPages, currentPage,
+          imageBase64: bookForm.imageBase64 || "",
+          order: maxOrder + 1,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      setSyncStatus("synced");
+    } catch (e) {
+      console.error(e);
+      setSyncStatus("error");
+    }
+  };
+
+  // --- 教材削除 ---
+  const deleteBook = async (id) => {
+    if (!window.confirm("この教材を削除しますか？")) return;
+    const p = getPaths(uid);
+    setSyncStatus("saving");
+    try {
+      await deleteDoc(p.textbook(id));
+      setSyncStatus("synced");
+    } catch (e) {
+      console.error(e);
+      setSyncStatus("error");
+    }
+  };
+
+  // --- 並べ替え ---
+  const moveBook = async (index, dir) => {
+    const swapIdx = index + dir;
+    if (swapIdx < 0 || swapIdx >= textbooks.length) return;
+    const p = getPaths(uid);
+    setSyncStatus("saving");
+    try {
+      await Promise.all([
+        setDoc(p.textbook(textbooks[index].id), { order: swapIdx }, { merge: true }),
+        setDoc(p.textbook(textbooks[swapIdx].id), { order: index }, { merge: true }),
+      ]);
+      setSyncStatus("synced");
+    } catch (e) {
+      setSyncStatus("error");
+    }
+  };
+
+  // --- ページ増減 ---
+  const changePage = async (book, delta) => {
+    const newPage = Math.max(0, Math.min((book.currentPage || 0) + delta, book.totalPages || 99999));
+    const today = getTodayStr();
+    const p = getPaths(uid);
+    setSyncStatus("saving");
+    try {
+      await setDoc(p.textbook(book.id), { currentPage: newPage, updatedAt: serverTimestamp() }, { merge: true });
+      // 今日のログも更新
+      const newTotal = textbooks.reduce((s, b) => b.id === book.id ? s + newPage : s + (b.currentPage || 0), 0);
+      const todayPages = Math.max(0, newTotal - (todayLog.startOfDayPages || 0));
+      await setDoc(p.dailyLog(today), {
+        pages: todayPages,
+        startOfDayPages: todayLog.startOfDayPages || 0,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      setSyncStatus("synced");
+    } catch (e) {
+      console.error(e);
+      setSyncStatus("error");
+    }
+  };
+
+  // --- 週間目標保存 ---
+  const saveGoal = async () => {
+    const val = parseInt(goalForm);
+    if (!val || val < 1) return;
+    const p = getPaths(uid);
+    setModal(null);
+    setSyncStatus("saving");
+    try {
+      await setDoc(p.settings, { target: val, lastResetMonday: getThisMondayStr(), updatedAt: serverTimestamp() }, { merge: true });
+      setSyncStatus("synced");
+    } catch (e) {
+      setSyncStatus("error");
+    }
+  };
+
+  // --- モーダルを開く ---
+  const openAddBook = () => {
+    setBookForm({ name: "", totalPages: "", currentPage: "", imageBase64: "" });
+    setEditTarget(null);
+    setModal("addBook");
+  };
+  const openEditBook = (book) => {
+    setBookForm({ name: book.name, totalPages: String(book.totalPages || ""), currentPage: String(book.currentPage || ""), imageBase64: book.imageBase64 || "" });
+    setEditTarget(book);
+    setModal("editBook");
+  };
+  const openSettings = () => { setGoalForm(String(weeklyGoal)); setModal("settings"); };
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const b64 = await resizeImage(file);
+    setBookForm((prev) => ({ ...prev, imageBase64: b64 }));
+  };
+
+  // 時刻
+  const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+  const dateStr = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}(${DAY_NAMES[now.getDay()]})`;
+  const syncColor = syncStatus === "synced" ? "#48bb78" : syncStatus === "saving" ? "#f6ad55" : "#fc8181";
+
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans overflow-x-hidden">
-      <style dangerouslySetInnerHTML={{ __html: `input { font-size: 16px !important; user-select: text !important; }` }} />
+    <div style={{
+      minHeight: "100vh",
+      background: "linear-gradient(160deg, #0d1117 0%, #161b27 60%, #1a1f35 100%)",
+      fontFamily: "'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic', sans-serif",
+      color: "#e2e8f0",
+      paddingBottom: "60px",
+    }}>
+      {/* ---- トップバー ---- */}
+      <div style={{
+        position: "sticky", top: 0, zIndex: 100,
+        background: "rgba(13,17,23,0.92)",
+        backdropFilter: "blur(12px)",
+        borderBottom: "1px solid rgba(255,255,255,0.07)",
+        padding: "10px 16px",
+        display: "flex", alignItems: "center", gap: "10px",
+      }}>
+        <button
+          onClick={showNextMessage}
+          style={{ background: "none", border: "none", cursor: "pointer", fontSize: "28px", lineHeight: 1, padding: "4px", WebkitTapHighlightColor: "transparent" }}
+          onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.88)")}
+          onPointerUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
+          onPointerLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
+        >
+          📚
+        </button>
 
-      {/* HEADER */}
-      <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 px-3 py-2 shadow-sm">
-        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
-          <div className="flex-1 bg-indigo-900 p-2 rounded-xl border border-indigo-700 flex items-start gap-2 shadow-inner overflow-hidden">
-            <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center shrink-0">
-               <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Support" className="w-6 h-6" />
-            </div>
-            <p className="text-[10px] font-bold text-white leading-tight truncate">{MASCOT_MESSAGES[Math.floor(time.getMinutes() / 4) % MASCOT_MESSAGES.length]}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={forceServerSync} className={`p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-slate-400 active:scale-90 transition-all ${isSyncing ? 'animate-spin text-indigo-600' : ''}`} title="強制同期"><RefreshCw className="w-4 h-4" /></button>
-            <div className="flex flex-col items-end bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shadow-inner shrink-0 font-black">
-               <div className="text-[11px] text-slate-800 font-mono tracking-tighter leading-none mb-1">{time.toLocaleTimeString('ja-JP', { hour12: false })}</div>
-               <div className="text-[8px] text-slate-400 leading-none">{getTodayStr().replace(/-/g, '/')}({getDayName(getTodayStr())})</div>
-            </div>
-            <button onClick={() => setIsLogoutModalOpen(true)} className="p-2.5 bg-slate-100 text-slate-400 rounded-xl active:scale-90"><LogOut className="w-4 h-4" /></button>
-          </div>
+        <div style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ fontSize: "20px", fontWeight: "800", letterSpacing: "0.04em", color: "#63b3ed", lineHeight: 1.1 }}>{timeStr}</div>
+          <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", marginTop: "2px" }}>{dateStr}</div>
+        </div>
+
+        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+          <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: syncColor, boxShadow: `0 0 6px ${syncColor}` }} title={syncStatus} />
+          <TapBtn onClick={openSettings} small>⚙️</TapBtn>
+          <TapBtn onClick={onLogout} small>🚪</TapBtn>
         </div>
       </div>
 
-      <main className="max-w-5xl w-full mx-auto p-3 sm:p-4 flex-grow pb-48">
-        {/* PROGRESS CARDS */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6 text-center font-black">
-          <div className="bg-slate-900 text-white p-3 rounded-2xl shadow-lg border-b-4 border-slate-800"><div className="text-[8px] text-slate-400 uppercase mb-1">残ノルマ</div><div className="text-xl sm:text-2xl truncate">{remainingWeeklyTarget}P</div></div>
-          <div className="bg-white border border-slate-100 p-3 rounded-2xl shadow-sm border-b-4 border-slate-50"><div className="text-[8px] text-indigo-600 uppercase mb-1">今日進捗</div><div className="text-xl sm:text-2xl">{todayStudied}P</div></div>
-          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-lg border-b-4 border-indigo-700"><div className="text-white/60 text-[8px] uppercase mb-1 text-nowrap">全体進捗</div><div className="text-xl sm:text-2xl">{totalProgress.percent}%</div></div>
+      {/* ---- 合格くんバブル ---- */}
+      {showMascot && (
+        <div style={{
+          position: "fixed", top: "68px", left: "50%", transform: "translateX(-50%)",
+          zIndex: 200, background: "linear-gradient(135deg,#2d3748,#4a5568)",
+          border: "1px solid rgba(99,179,237,0.4)", borderRadius: "16px",
+          padding: "12px 20px", maxWidth: "88vw", textAlign: "center",
+          fontSize: "14px", color: "#bee3f8", boxShadow: "0 8px 32px rgba(0,0,0,0.45)",
+          animation: "fadeInDown 0.3s ease",
+        }}>
+          {mascotMsg}
+        </div>
+      )}
+
+      {/* ---- サマリーカード ---- */}
+      <div style={{ padding: "16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", maxWidth: "600px", margin: "0 auto" }}>
+        <SummaryCard icon="📅" label="残ノルマ" value={remainingNorma} unit="p" color="#fc8181" />
+        <SummaryCard icon="✏️" label="今日の進捗" value={todayProgress} unit="p" color="#68d391" />
+        <SummaryCard icon="🎯" label="週間目標" value={weeklyGoal} unit="p" color="#63b3ed" onClick={openSettings} />
+        <SummaryCard icon="📖" label="教材数" value={textbooks.length} unit="冊" color="#f6ad55" />
+      </div>
+
+      {/* ---- 教材リスト ---- */}
+      <div style={{ padding: "0 16px 16px", maxWidth: "600px", margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "rgba(255,255,255,0.75)" }}>
+            📚 教材一覧
+          </h2>
+          <TapBtn onClick={openAddBook} accent>＋ 追加</TapBtn>
         </div>
 
-        {/* ADD BUTTON */}
-        <button onClick={() => { setEditingBookId(null); setForm({title:'',totalPages:'',currentPage:'',coverUrl:''}); setIsModalOpen(true); }} className="w-full bg-indigo-600 text-white py-4 rounded-2xl shadow-lg font-black flex items-center justify-center gap-2 mb-6 active:scale-95 transition-all"><Plus className="w-5 h-5" /> 教材を追加</button>
-
-        {/* TEXTBOOK LIST */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {textbooks.map((b, idx) => {
-            const prog = Math.round((Number(b.currentPage) / (Number(b.totalPages) || 1)) * 100);
-            return (
-              <div key={b.id} className="bg-white rounded-3xl border border-slate-100 shadow-sm flex overflow-hidden group active:bg-slate-50/50 transition-all">
-                <div className="w-24 bg-slate-50 flex-shrink-0 flex items-center justify-center border-r border-slate-100 relative">
-                  {b.coverUrl ? <img src={String(b.coverUrl)} className="w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-1 opacity-20"><Book className="w-6 h-6 text-slate-800" /><span className="text-[10px] font-black">{prog}%</span></div>}
-                </div>
-                <div className="p-4 flex-grow flex flex-col justify-between min-w-0 text-left">
-                  <div>
-                    <div className="flex justify-between items-start mb-1 gap-1">
-                      <h3 className="font-black text-sm text-slate-800 truncate flex-1">{b.title}</h3>
-                      <div className="flex gap-1 shrink-0">
-                         <button onClick={() => moveTextbook(idx, -1)} disabled={idx === 0} className="p-1 text-slate-300 disabled:opacity-5 active:scale-90"><ChevronUp className="w-4 h-4" /></button>
-                         <button onClick={() => moveTextbook(idx, 1)} disabled={idx === textbooks.length - 1} className="p-1 text-slate-300 disabled:opacity-5 active:scale-90"><ChevronDown className="w-4 h-4" /></button>
-                         <button onClick={() => { setEditingBookId(b.id); setForm({title:b.title,totalPages:b.totalPages,currentPage:b.currentPage,coverUrl:b.coverUrl||""}); setIsModalOpen(true); }} className="p-1 text-slate-300 active:scale-90"><Edit2 className="w-4 h-4" /></button>
-                         <button onClick={() => { setDeleteConfirmId(b.id) }} className="p-1 text-slate-300 active:scale-90"><Trash2 className="w-4 h-4" /></button>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 mb-3">
-                       <div className="flex-grow bg-slate-100 h-2 rounded-full overflow-hidden"><div className={`h-full transition-all duration-700 ${prog >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`} style={{ width: `${prog}%` }} /></div>
-                       <span className="text-[10px] font-black text-slate-400 shrink-0">{prog}%</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5"><input type="number" value={Number(b.currentPage)} onChange={(e) => updateProgress(b.id, e.target.value)} className="w-16 bg-slate-50 text-center text-sm font-black rounded-xl py-2 border border-slate-100 outline-none focus:ring-2 focus:ring-indigo-100" /><span className="text-[10px] text-slate-400 font-bold shrink-0">/ {Number(b.totalPages)} P</span></div>
-                    {prog >= 100 && <CheckCircle2 className="w-4 h-4 text-emerald-500 animate-in zoom-in" />}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </main>
-
-      {/* SYNC & DEBUG STATUS (常設コンソール) */}
-      <div className="fixed bottom-4 left-4 right-4 flex flex-col gap-1 pointer-events-none z-[100]">
-        <div className="flex items-center justify-between">
-          <div className={`bg-white/95 px-3 py-1.5 rounded-full border border-slate-100 shadow-lg flex items-center gap-2`}>
-            {dataOrigin === "Server" ? <Wifi className="w-3.5 h-3.5 text-indigo-600" /> : <WifiOff className="w-3.5 h-3.5 text-amber-500 animate-pulse" />}
-            <span className={`text-[8px] font-black uppercase ${dataOrigin === "Server" ? 'text-indigo-600' : 'text-amber-600'}`}>Status: {dataOrigin}</span>
+        {textbooks.length === 0 ? (
+          <div style={{
+            textAlign: "center", padding: "40px 20px",
+            color: "rgba(255,255,255,0.25)",
+            border: "2px dashed rgba(255,255,255,0.08)", borderRadius: "16px",
+          }}>
+            <div style={{ fontSize: "36px", marginBottom: "10px" }}>📭</div>
+            <div>「＋ 追加」から教材を登録してください</div>
           </div>
-          <div className="bg-indigo-600 px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 text-[8px] font-black text-white">
-             {VERSION} | UID:{user?.uid.slice(-8).toUpperCase()}
-          </div>
-        </div>
-        
-        {syncError && (
-          <div className="bg-red-50 text-red-600 px-3 py-2 rounded-xl border border-red-200 shadow-lg animate-in slide-in-from-bottom flex items-start gap-2">
-            <Terminal className="w-3 h-3 mt-0.5 shrink-0" />
-            <div className="flex flex-col text-left">
-              <span className="text-[9px] font-black uppercase tracking-tighter">System Report</span>
-              <span className="text-[10px] font-bold leading-tight">{syncError}</span>
-            </div>
-          </div>
+        ) : (
+          textbooks.map((book, i) => (
+            <BookCard
+              key={book.id}
+              book={book}
+              index={i}
+              total={textbooks.length}
+              onEdit={() => openEditBook(book)}
+              onDelete={() => deleteBook(book.id)}
+              onMoveUp={() => moveBook(i, -1)}
+              onMoveDown={() => moveBook(i, 1)}
+              onChangePage={(delta) => changePage(book, delta)}
+            />
+          ))
         )}
-
-        <div className="flex items-center justify-center bg-white/80 rounded-lg px-2 py-0.5 border border-slate-100 shadow-sm">
-           <Activity className="w-2 h-2 text-indigo-400 mr-1" />
-           <span className="text-[6px] font-bold text-slate-400 font-mono tracking-tighter uppercase">ADDR: /artifacts/{MASTER_DB_PATH}/...</span>
-        </div>
       </div>
 
-      {/* モーダル類 */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto text-slate-900">
-          <div className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl p-8 max-h-[90vh] overflow-y-auto border border-slate-100">
-            <h2 className="text-xl font-black text-center mb-8">{editingBookId ? '教材を編集' : '教材を追加'}</h2>
-            <form onSubmit={handleSave} className="space-y-5 text-left">
-              <input required type="text" placeholder="教材名" className="w-full bg-slate-50 rounded-xl px-4 py-4 font-bold text-base outline-none border border-slate-200 select-text" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
-              <div className="flex flex-col items-center gap-3 border-2 border-dashed border-slate-200 rounded-2xl p-4 bg-slate-50 cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-                {form.coverUrl ? <img src={String(form.coverUrl)} className="w-20 h-28 object-cover rounded-xl shadow-md" /> : <><ImageIcon className="w-6 h-6 text-slate-300" /><span className="text-[10px] font-black text-slate-400">カバー画像をアップロード</span></>}
-                <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={async (e) => { if(e.target.files[0]) setForm({...form, coverUrl: await resizeImage(e.target.files[0])}); }} />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase text-left block">総ページ数</label><input required type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold outline-none border border-slate-200 select-text" value={form.totalPages} onChange={e => setForm({...form, totalPages: e.target.value})} /></div>
-                <div className="space-y-1"><label className="text-[9px] font-black text-slate-400 ml-1 uppercase text-left block">現在ページ</label><input type="number" className="w-full bg-slate-50 rounded-xl px-4 py-3 font-bold outline-none border border-slate-200 select-text" value={form.currentPage} onChange={e => setForm({...form, currentPage: e.target.value})} /></div>
-              </div>
-              <div className="flex gap-3 pt-4"><button type="button" onClick={() => { setIsModalOpen(false); setEditingBookId(null); }} className="flex-1 bg-slate-100 py-4 rounded-xl font-black active:scale-95">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-xl font-black shadow-lg active:scale-95 transition-all">保存する</button></div>
-            </form>
+      {/* ---- モーダル ---- */}
+      {(modal === "addBook" || modal === "editBook") && (
+        <BottomModal title={modal === "addBook" ? "📗 教材を追加" : "✏️ 教材を編集"} onClose={() => setModal(null)}>
+          <FormInput label="教材名" value={bookForm.name} onChange={(v) => setBookForm((p) => ({ ...p, name: v }))} placeholder="例: 財務会計論テキスト" />
+          <FormInput label="総ページ数" value={bookForm.totalPages} onChange={(v) => setBookForm((p) => ({ ...p, totalPages: v }))} type="number" placeholder="例: 500" />
+          <FormInput label="現在のページ" value={bookForm.currentPage} onChange={(v) => setBookForm((p) => ({ ...p, currentPage: v }))} type="number" placeholder="例: 120" />
+          <div style={{ marginBottom: "18px" }}>
+            <label style={labelStyle}>表紙画像（任意）</label>
+            <input type="file" accept="image/*" onChange={handleImageUpload} style={{ color: "rgba(255,255,255,0.6)", fontSize: "14px", display: "block" }} />
+            {bookForm.imageBase64 && (
+              <img src={bookForm.imageBase64} alt="preview" style={{ width: "56px", height: "74px", objectFit: "cover", borderRadius: "6px", marginTop: "8px" }} />
+            )}
           </div>
-        </div>
+          <TapBtn onClick={saveBook} accent full>{modal === "addBook" ? "追加する" : "保存する"}</TapBtn>
+        </BottomModal>
       )}
 
-      {/* ログアウト確認モーダル */}
-      {isLogoutModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
-          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200 text-slate-900">
-            <h3 className="font-black text-lg mb-2">ログアウトしますか？</h3>
-            <p className="text-[11px] text-slate-400 mb-8 font-bold">データはクラウドに安全に保存されています。</p>
-            <div className="flex gap-3"><button onClick={() => setIsLogoutModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={handleLogout} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl text-[11px] font-black shadow-lg active:scale-95 transition-all">ログアウト</button></div>
+      {modal === "settings" && (
+        <BottomModal title="⚙️ 設定" onClose={() => setModal(null)}>
+          <FormInput label="週間目標ページ数" value={goalForm} onChange={setGoalForm} type="number" placeholder="例: 100" />
+          <TapBtn onClick={saveGoal} accent full>保存する</TapBtn>
+          <div style={{ marginTop: "16px", padding: "12px", background: "rgba(255,255,255,0.04)", borderRadius: "10px", fontSize: "12px", color: "rgba(255,255,255,0.35)", lineHeight: 1.8 }}>
+            <div>🔑 UID: {uid.slice(0, 12)}...</div>
+            <div>📡 固定ID: {FIXED_ID}</div>
+            <div>📱 同期: {syncStatus === "synced" ? "✅ 正常" : syncStatus === "saving" ? "⏳ 保存中" : "❌ エラー"}</div>
           </div>
-        </div>
+        </BottomModal>
       )}
 
-      {/* 削除確認モーダル */}
-      {deleteConfirmId && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] pointer-events-auto">
-          <div className="bg-white rounded-[2rem] w-full max-w-xs shadow-2xl p-8 text-center border border-slate-200 text-slate-900">
-            <h3 className="font-black text-lg mb-2">教材を削除しますか？</h3>
-            <p className="text-[11px] text-slate-400 mb-8 font-bold text-balance">この教材の記録が完全に消去されます。</p>
-            <div className="flex gap-3"><button onClick={() => setDeleteConfirmId(null)} className="flex-1 py-4 bg-slate-100 rounded-2xl text-[11px] font-black active:scale-95">キャンセル</button><button onClick={async () => { if(user) { await deleteDoc(doc(db, 'artifacts', MASTER_DB_PATH, 'users', user.uid, 'textbooks', deleteConfirmId)); setDeleteConfirmId(null); } }} className="flex-1 py-4 bg-red-500 text-white rounded-2xl text-[11px] font-black shadow-md active:scale-95">削除する</button></div>
-          </div>
-        </div>
-      )}
+      <style>{`
+        @keyframes fadeInDown {
+          from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
+          to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+      `}</style>
     </div>
   );
-};
+}
 
-export default App;
+// ============================================================
+// 教材カード
+// ============================================================
+function BookCard({ book, index, total, onEdit, onDelete, onMoveUp, onMoveDown, onChangePage }) {
+  const progress = book.totalPages > 0 ? Math.min(100, Math.round(((book.currentPage || 0) / book.totalPages) * 100)) : 0;
+  const barColor = progress >= 100 ? "#68d391" : progress >= 50 ? "#63b3ed" : "#f6ad55";
+
+  return (
+    <div style={{
+      background: "rgba(255,255,255,0.04)",
+      border: "1px solid rgba(255,255,255,0.07)",
+      borderRadius: "16px",
+      padding: "14px",
+      marginBottom: "10px",
+    }}>
+      <div style={{ display: "flex", gap: "12px" }}>
+        {/* 表紙 */}
+        <div style={{
+          width: "46px", height: "62px", borderRadius: "6px", flexShrink: 0,
+          background: book.imageBase64 ? "transparent" : "linear-gradient(135deg,#2d3748,#4a5568)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: "22px", overflow: "hidden",
+        }}>
+          {book.imageBase64 ? <img src={book.imageBase64} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "📗"}
+        </div>
+
+        {/* 情報 */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: "700", fontSize: "15px", marginBottom: "3px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {book.name}
+          </div>
+          <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.45)", marginBottom: "8px" }}>
+            {book.currentPage || 0} / {book.totalPages || "?"} p — {progress}%
+          </div>
+          <div style={{ height: "5px", background: "rgba(255,255,255,0.08)", borderRadius: "3px", overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${progress}%`, background: barColor, borderRadius: "3px", transition: "width 0.4s ease" }} />
+          </div>
+        </div>
+      </div>
+
+      {/* 操作ボタン */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "12px", gap: "6px" }}>
+        <div style={{ display: "flex", gap: "5px" }}>
+          {[1, 5, 10].map((n) => (
+            <TapBtn key={n} onClick={() => onChangePage(n)} color="#68d391">+{n}</TapBtn>
+          ))}
+          <TapBtn onClick={() => onChangePage(-1)} color="#fc8181">-1</TapBtn>
+        </div>
+        <div style={{ display: "flex", gap: "4px" }}>
+          <TapBtn onClick={onMoveUp} disabled={index === 0} color="#a0aec0">▲</TapBtn>
+          <TapBtn onClick={onMoveDown} disabled={index === total - 1} color="#a0aec0">▼</TapBtn>
+          <TapBtn onClick={onEdit} color="#63b3ed">✏️</TapBtn>
+          <TapBtn onClick={onDelete} color="#fc8181">🗑</TapBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// サマリーカード
+// ============================================================
+function SummaryCard({ icon, label, value, unit, color, onClick }) {
+  return (
+    <div onClick={onClick} style={{
+      background: "rgba(255,255,255,0.04)",
+      border: `1px solid ${color}28`,
+      borderRadius: "14px",
+      padding: "14px 12px",
+      cursor: onClick ? "pointer" : "default",
+    }}>
+      <div style={{ fontSize: "20px", marginBottom: "4px" }}>{icon}</div>
+      <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", marginBottom: "4px" }}>{label}</div>
+      <div style={{ fontSize: "28px", fontWeight: "800", color, lineHeight: 1 }}>
+        {value}<span style={{ fontSize: "12px", fontWeight: "400", marginLeft: "3px" }}>{unit}</span>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ボトムシートモーダル
+// ============================================================
+function BottomModal({ title, children, onClose }) {
+  return (
+    <div
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+      style={{
+        position: "fixed", inset: 0, zIndex: 300,
+        background: "rgba(0,0,0,0.72)",
+        display: "flex", alignItems: "flex-end", justifyContent: "center",
+        backdropFilter: "blur(5px)",
+      }}
+    >
+      <div style={{
+        background: "linear-gradient(160deg,#1a202c,#2d3748)",
+        border: "1px solid rgba(255,255,255,0.1)",
+        borderRadius: "20px 20px 0 0",
+        padding: "24px 20px 48px",
+        width: "100%", maxWidth: "500px",
+        maxHeight: "88vh", overflowY: "auto",
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "22px" }}>
+          <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "700" }}>{title}</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.45)", fontSize: "22px", cursor: "pointer", padding: "4px", lineHeight: 1 }}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// フォーム入力
+// ============================================================
+function FormInput({ label, value, onChange, type = "text", placeholder }) {
+  return (
+    <div style={{ marginBottom: "16px" }}>
+      <label style={labelStyle}>{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        inputMode={type === "number" ? "numeric" : undefined}
+        style={{
+          width: "100%",
+          padding: "12px 14px",
+          fontSize: "16px", // iOSズーム防止
+          border: "1px solid rgba(255,255,255,0.13)",
+          borderRadius: "10px",
+          background: "rgba(255,255,255,0.07)",
+          color: "#fff",
+          outline: "none",
+          boxSizing: "border-box",
+          WebkitAppearance: "none",
+        }}
+      />
+    </div>
+  );
+}
+
+// ============================================================
+// 汎用タップボタン
+// ============================================================
+function TapBtn({ children, onClick, color = "#63b3ed", disabled = false, accent = false, small = false, full = false }) {
+  const bg = accent
+    ? "linear-gradient(135deg,#63b3ed,#4299e1)"
+    : disabled ? "rgba(255,255,255,0.04)" : `${color}18`;
+  const borderColor = disabled ? "rgba(255,255,255,0.05)" : accent ? "transparent" : `${color}45`;
+  const textColor = disabled ? "rgba(255,255,255,0.2)" : accent ? "#fff" : color;
+
+  return (
+    <button
+      onClick={disabled ? undefined : onClick}
+      style={{
+        background: bg,
+        border: `1px solid ${borderColor}`,
+        borderRadius: "8px",
+        padding: small ? "6px 10px" : "7px 11px",
+        color: textColor,
+        fontSize: small ? "14px" : "13px",
+        fontWeight: "700",
+        cursor: disabled ? "not-allowed" : "pointer",
+        transition: "transform 0.1s",
+        WebkitTapHighlightColor: "transparent",
+        minWidth: full ? "auto" : "36px",
+        width: full ? "100%" : undefined,
+        boxShadow: accent ? "0 3px 12px rgba(66,153,225,0.3)" : "none",
+      }}
+      onPointerDown={(e) => { if (!disabled) e.currentTarget.style.transform = "scale(0.92)"; }}
+      onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+      onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ============================================================
+// スタイル定数
+// ============================================================
+const labelStyle = {
+  display: "block",
+  color: "rgba(255,255,255,0.6)",
+  fontSize: "13px",
+  fontWeight: "600",
+  marginBottom: "6px",
+};
