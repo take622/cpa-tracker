@@ -1,9 +1,7 @@
 // ============================================================
-// CPA Study Tracker - App.jsx 最終版
-// ・Safari入力問題完全対応
-// ・ログアウト・削除確認ダイアログ
-// ・Firestore リアルタイム同期
-// FIXED_ID: CPA_ROOT_V7000 (ハードコード固定・絶対変更しない)
+// CPA Study Tracker - App.jsx
+// Safari入力完全対応版
+// FIXED_ID: CPA_ROOT_V7000 (絶対変更禁止)
 // ============================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -28,9 +26,6 @@ import {
   orderBy,
 } from "firebase/firestore";
 
-// ============================================================
-// Firebase設定（ハードコード固定）
-// ============================================================
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyBgPwP-30BuXvuydRe6NsYJInMVMlmaWsE",
   authDomain: "cpa-tracker-a0f14.firebaseapp.com",
@@ -40,46 +35,38 @@ const FIREBASE_CONFIG = {
   appId: "1:77528125896:web:13829c71b21a7870d870fd",
 };
 
-const FIXED_ID = "CPA_ROOT_V7000"; // 絶対変更禁止
+const FIXED_ID = "CPA_ROOT_V7000";
 const DEFAULT_WEEKLY = 100;
 const DAY_JA = ["日","月","火","水","木","金","土"];
 
-// Firebase初期化（重複防止）
 const fbApp = getApps().length === 0 ? initializeApp(FIREBASE_CONFIG) : getApps()[0];
 const auth  = getAuth(fbApp);
 const db    = getFirestore(fbApp);
 
-// Firestoreパス生成
 const P = (uid) => ({
-  settings:    doc(db, `artifacts/${FIXED_ID}/users/${uid}/settings/weeklyGoal`),
-  tbCol:       collection(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks`),
-  tb:    (id)  => doc(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks/${id}`),
-  log:   (dt)  => doc(db, `artifacts/${FIXED_ID}/users/${uid}/dailyLogs/${dt}`),
+  settings: doc(db, `artifacts/${FIXED_ID}/users/${uid}/settings/weeklyGoal`),
+  tbCol:    collection(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks`),
+  tb:  (id) => doc(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks/${id}`),
+  log: (dt) => doc(db, `artifacts/${FIXED_ID}/users/${uid}/dailyLogs/${dt}`),
 });
 
-// 日付
-const toDay = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-};
+const pad = (n) => String(n).padStart(2, "0");
+const toDay = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
 const toMonday = () => {
   const d = new Date();
   const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
   d.setDate(d.getDate() + diff);
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 };
-const pad = (n) => String(n).padStart(2,"0");
 
-// 画像リサイズ
 const resizeImg = (file) => new Promise((res) => {
   const r = new FileReader();
   r.onload = (e) => {
     const img = new Image();
     img.onload = () => {
-      const [maxW, maxH] = [200, 200];
-      let w = img.width, h = img.height;
-      if (w > maxW) { h = h * maxW / w; w = maxW; }
-      if (h > maxH) { w = w * maxH / h; h = maxH; }
+      let [w, h] = [img.width, img.height];
+      if (w > 200) { h = h * 200 / w; w = 200; }
+      if (h > 200) { w = w * 200 / h; h = 200; }
       const c = document.createElement("canvas");
       c.width = w; c.height = h;
       c.getContext("2d").drawImage(img, 0, 0, w, h);
@@ -90,7 +77,6 @@ const resizeImg = (file) => new Promise((res) => {
   r.readAsDataURL(file);
 });
 
-// メッセージ
 const MSGS = [
   "今日も一歩前進！合格まであと少し！",
   "継続は力なり。君なら絶対できる！",
@@ -103,150 +89,78 @@ const MSGS = [
   "今日の頑張りを明日の自分が感謝する！",
   "財務諸表も最初は誰でも苦手。大丈夫！",
 ];
-const shuffle = (a) => {
-  const b = [...a];
-  for (let i = b.length-1; i > 0; i--) {
-    const j = Math.floor(Math.random()*(i+1));
-    [b[i],b[j]] = [b[j],b[i]];
-  }
-  return b;
-};
+const shuffle = (a) => { const b=[...a]; for(let i=b.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[b[i],b[j]]=[b[j],b[i]];} return b; };
 
 // ============================================================
-// グローバルスタイル（一度だけ挿入）
+// グローバルCSS
+// Safari対策の核心:
+//   1. input/textareaのfont-sizeを16px以上に強制（ズーム防止）
+//   2. *にuser-select:noneを絶対に書かない
+//   3. backdropFilterをinputの親に使わない（Safariバグ）
 // ============================================================
-const GLOBAL_CSS = `
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  body { margin: 0; background: #0d1117; }
-  input, textarea, select {
+const GCSS = `
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0d1117; }
+
+  /* Safari iPhone キーボード表示の核心設定 */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  textarea {
     font-size: 16px !important;
-    -webkit-appearance: none;
-    appearance: none;
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    -webkit-user-select: auto !important;
+    user-select: auto !important;
+    touch-action: manipulation !important;
+    pointer-events: auto !important;
+    cursor: text !important;
     border-radius: 10px;
   }
-  /* Safari フォーカス時のズーム完全防止 */
-  @media screen and (-webkit-min-device-pixel-ratio: 0) {
-    select, textarea, input {
-      font-size: 16px !important;
-    }
+
+  /* タップハイライト除去はbutton/aのみ */
+  button, a {
+    -webkit-tap-highlight-color: transparent;
   }
 `;
 
 // ============================================================
-// カスタム確認ダイアログ（window.confirmの代替 - Safari対応）
+// 確認ダイアログ
 // ============================================================
-function ConfirmDialog({ message, onOk, onCancel }) {
+function ConfirmDlg({ msg, okLabel, okColor, onOk, onCancel }) {
   return (
-    <div
-      style={{
-        position:"fixed", inset:0, zIndex:9999,
-        background:"rgba(0,0,0,0.75)",
-        display:"flex", alignItems:"center", justifyContent:"center",
-        padding:"20px",
-      }}
-    >
+    <div style={{
+      position:"fixed", inset:0, zIndex:9999,
+      background:"rgba(0,0,0,0.8)",
+      display:"flex", alignItems:"center", justifyContent:"center",
+      padding:"20px",
+    }}>
       <div style={{
         background:"#1e2533",
         border:"1px solid rgba(255,255,255,0.15)",
         borderRadius:"16px",
-        padding:"24px 20px",
-        width:"100%", maxWidth:"320px",
+        padding:"28px 20px 24px",
+        width:"100%", maxWidth:"300px",
         textAlign:"center",
+        fontFamily:"'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif",
       }}>
-        <p style={{
-          color:"#e2e8f0", fontSize:"16px", lineHeight:1.6,
-          margin:"0 0 24px",
-        }}>
-          {message}
-        </p>
+        <p style={{ color:"#e2e8f0", fontSize:"16px", lineHeight:1.65, margin:"0 0 24px" }}>{msg}</p>
         <div style={{ display:"flex", gap:"10px" }}>
-          <button
-            onClick={onCancel}
-            style={{
-              flex:1, padding:"13px",
-              background:"rgba(255,255,255,0.08)",
-              border:"1px solid rgba(255,255,255,0.15)",
-              borderRadius:"10px",
-              color:"rgba(255,255,255,0.7)",
-              fontSize:"15px", fontWeight:"600",
-              cursor:"pointer",
-            }}
-          >
-            キャンセル
-          </button>
-          <button
-            onClick={onOk}
-            style={{
-              flex:1, padding:"13px",
-              background:"linear-gradient(135deg,#fc8181,#e53e3e)",
-              border:"none",
-              borderRadius:"10px",
-              color:"#fff",
-              fontSize:"15px", fontWeight:"700",
-              cursor:"pointer",
-            }}
-          >
-            削除する
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LogoutDialog({ onOk, onCancel }) {
-  return (
-    <div
-      style={{
-        position:"fixed", inset:0, zIndex:9999,
-        background:"rgba(0,0,0,0.75)",
-        display:"flex", alignItems:"center", justifyContent:"center",
-        padding:"20px",
-      }}
-    >
-      <div style={{
-        background:"#1e2533",
-        border:"1px solid rgba(255,255,255,0.15)",
-        borderRadius:"16px",
-        padding:"24px 20px",
-        width:"100%", maxWidth:"320px",
-        textAlign:"center",
-      }}>
-        <p style={{
-          color:"#e2e8f0", fontSize:"16px", lineHeight:1.6,
-          margin:"0 0 24px",
-        }}>
-          ログアウトしますか？
-        </p>
-        <div style={{ display:"flex", gap:"10px" }}>
-          <button
-            onClick={onCancel}
-            style={{
-              flex:1, padding:"13px",
-              background:"rgba(255,255,255,0.08)",
-              border:"1px solid rgba(255,255,255,0.15)",
-              borderRadius:"10px",
-              color:"rgba(255,255,255,0.7)",
-              fontSize:"15px", fontWeight:"600",
-              cursor:"pointer",
-            }}
-          >
-            キャンセル
-          </button>
-          <button
-            onClick={onOk}
-            style={{
-              flex:1, padding:"13px",
-              background:"linear-gradient(135deg,#63b3ed,#4299e1)",
-              border:"none",
-              borderRadius:"10px",
-              color:"#fff",
-              fontSize:"15px", fontWeight:"700",
-              cursor:"pointer",
-            }}
-          >
-            ログアウト
-          </button>
+          <button onClick={onCancel} style={{
+            flex:1, padding:"13px",
+            background:"rgba(255,255,255,0.08)",
+            border:"1px solid rgba(255,255,255,0.15)",
+            borderRadius:"10px",
+            color:"rgba(255,255,255,0.75)",
+            fontSize:"15px", fontWeight:"600", cursor:"pointer",
+          }}>キャンセル</button>
+          <button onClick={onOk} style={{
+            flex:1, padding:"13px",
+            background: okColor || "linear-gradient(135deg,#fc8181,#e53e3e)",
+            border:"none", borderRadius:"10px",
+            color:"#fff", fontSize:"15px", fontWeight:"700", cursor:"pointer",
+          }}>{okLabel}</button>
         </div>
       </div>
     </div>
@@ -255,23 +169,25 @@ function LogoutDialog({ onOk, onCancel }) {
 
 // ============================================================
 // ログイン画面
-// Safari対策: input要素を直接divの子に置く。親にpointer-events等一切なし。
+// Safari最重要対策:
+//   - backdrop-filter を一切使わない
+//   - 親divにpointer-events/user-selectを書かない
+//   - inputは必ずdisplay:block、width:100%
+//   - onTouchStart等のタッチイベントをinputにつけない
 // ============================================================
 function LoginScreen({ onLogin, onSignup }) {
-  const [email, setEmail]       = useState("");
-  const [pass,  setPass]        = useState("");
-  const [isNew, setIsNew]       = useState(false);
-  const [err,   setErr]         = useState("");
-  const [busy,  setBusy]        = useState(false);
+  const [email, setEmail] = useState("");
+  const [pass,  setPass]  = useState("");
+  const [isNew, setIsNew] = useState(false);
+  const [err,   setErr]   = useState("");
+  const [busy,  setBusy]  = useState(false);
 
   const submit = async () => {
     if (!email || !pass) { setErr("メールとパスワードを入力してください"); return; }
     setErr(""); setBusy(true);
     try {
-      isNew
-        ? await onSignup(email, pass)
-        : await onLogin(email, pass);
-    } catch(e) {
+      isNew ? await onSignup(email, pass) : await onLogin(email, pass);
+    } catch (e) {
       const m = {
         "auth/user-not-found":       "メールアドレスが見つかりません",
         "auth/wrong-password":       "パスワードが間違っています",
@@ -286,38 +202,46 @@ function LoginScreen({ onLogin, onSignup }) {
 
   return (
     <>
-      <style>{GLOBAL_CSS}</style>
-      {/* 
-        Safari入力対策:
-        - このdivにはuserSelect/pointerEvents等の阻害スタイル一切なし
-        - inputは必ずfontSize:16px
-        - onTouchStart等の干渉イベントなし
+      <style>{GCSS}</style>
+      {/*
+        ★ Safari対策: このdivにbackdropFilterを使わない
+        ★ backgroundはgradientのみ（filterなし）
       */}
       <div style={{
-        minHeight:"100vh",
-        background:"linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%)",
-        display:"flex", alignItems:"center", justifyContent:"center",
-        padding:"24px 16px",
-        fontFamily:"'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif",
+        minHeight: "100vh",
+        background: "#0f1923",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "24px 16px",
+        fontFamily: "'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif",
       }}>
+        {/*
+          ★ このカードdivにbackdropFilter/filter不使用
+          ★ overflow:hiddenも使わない（Safariでinputが死ぬ場合がある）
+        */}
         <div style={{
-          width:"100%", maxWidth:"360px",
-          background:"rgba(255,255,255,0.06)",
-          border:"1px solid rgba(255,255,255,0.12)",
-          borderRadius:"20px",
-          padding:"36px 24px 40px",
+          width: "100%",
+          maxWidth: "360px",
+          background: "rgba(255,255,255,0.07)",
+          border: "1px solid rgba(255,255,255,0.13)",
+          borderRadius: "20px",
+          padding: "36px 24px 40px",
         }}>
           {/* ロゴ */}
           <div style={{ textAlign:"center", marginBottom:"28px" }}>
-            <div style={{ fontSize:"50px", lineHeight:1, marginBottom:"10px" }}>📚</div>
+            <div style={{ fontSize:"52px", lineHeight:1, marginBottom:"10px" }}>📚</div>
             <div style={{ color:"#fff", fontSize:"20px", fontWeight:"700" }}>CPA Study Tracker</div>
-            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:"12px", marginTop:"4px" }}>合格への道を、一緒に歩もう</div>
+            <div style={{ color:"rgba(255,255,255,0.4)", fontSize:"12px", marginTop:"5px" }}>合格への道を、一緒に歩もう</div>
           </div>
 
           {/* タブ */}
           <div style={{
-            display:"flex", background:"rgba(0,0,0,0.35)",
-            borderRadius:"10px", padding:"4px", marginBottom:"22px",
+            display:"flex",
+            background:"rgba(0,0,0,0.35)",
+            borderRadius:"10px",
+            padding:"4px",
+            marginBottom:"24px",
           }}>
             {["ログイン","新規登録"].map((l,i) => (
               <button
@@ -326,42 +250,55 @@ function LoginScreen({ onLogin, onSignup }) {
                 style={{
                   flex:1, padding:"10px", border:"none", borderRadius:"7px",
                   fontSize:"14px", fontWeight:"600", cursor:"pointer",
-                  background: isNew===(i===1) ? "rgba(99,179,237,0.9)" : "transparent",
+                  background: isNew===(i===1) ? "#63b3ed" : "transparent",
                   color:      isNew===(i===1) ? "#1a1a2e" : "rgba(255,255,255,0.55)",
                 }}
               >{l}</button>
             ))}
           </div>
 
-          {/* メール */}
+          {/* ★ メール入力: labelとinputだけのシンプルなdiv */}
           <div style={{ marginBottom:"14px" }}>
-            <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"13px", marginBottom:"6px" }}>
+            <label style={{
+              display:"block",
+              color:"rgba(255,255,255,0.65)",
+              fontSize:"14px",
+              marginBottom:"7px",
+            }}>
               メールアドレス
             </label>
-            {/* ★ inputを直置き・fontSize16px・余計なラッパーなし */}
             <input
               type="email"
               autoComplete="email"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck="false"
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="example@email.com"
               style={{
-                display:"block",
-                width:"100%",
-                padding:"13px 14px",
-                fontSize:"16px",
-                background:"rgba(255,255,255,0.1)",
-                border:"1px solid rgba(255,255,255,0.18)",
-                borderRadius:"10px",
-                color:"#fff",
-                outline:"none",
+                display: "block",
+                width: "100%",
+                padding: "14px",
+                fontSize: "16px",
+                lineHeight: "1.4",
+                color: "#fff",
+                background: "rgba(255,255,255,0.1)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: "10px",
+                outline: "none",
               }}
             />
           </div>
 
-          {/* パスワード */}
-          <div style={{ marginBottom:"20px" }}>
-            <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"13px", marginBottom:"6px" }}>
+          {/* ★ パスワード入力 */}
+          <div style={{ marginBottom:"22px" }}>
+            <label style={{
+              display:"block",
+              color:"rgba(255,255,255,0.65)",
+              fontSize:"14px",
+              marginBottom:"7px",
+            }}>
               パスワード
             </label>
             <input
@@ -369,18 +306,19 @@ function LoginScreen({ onLogin, onSignup }) {
               autoComplete={isNew ? "new-password" : "current-password"}
               value={pass}
               onChange={e => setPass(e.target.value)}
-              onKeyDown={e => e.key==="Enter" && submit()}
+              onKeyDown={e => e.key === "Enter" && submit()}
               placeholder="6文字以上"
               style={{
-                display:"block",
-                width:"100%",
-                padding:"13px 14px",
-                fontSize:"16px",
-                background:"rgba(255,255,255,0.1)",
-                border:"1px solid rgba(255,255,255,0.18)",
-                borderRadius:"10px",
-                color:"#fff",
-                outline:"none",
+                display: "block",
+                width: "100%",
+                padding: "14px",
+                fontSize: "16px",
+                lineHeight: "1.4",
+                color: "#fff",
+                background: "rgba(255,255,255,0.1)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: "10px",
+                outline: "none",
               }}
             />
           </div>
@@ -398,9 +336,9 @@ function LoginScreen({ onLogin, onSignup }) {
             onClick={submit}
             disabled={busy}
             style={{
-              display:"block", width:"100%", padding:"14px",
+              display:"block", width:"100%", padding:"15px",
               fontSize:"16px", fontWeight:"700",
-              background: busy ? "rgba(99,179,237,0.3)" : "linear-gradient(135deg,#63b3ed,#4299e1)",
+              background: busy ? "rgba(99,179,237,0.3)" : "#4299e1",
               border:"none", borderRadius:"10px", color:"#fff",
               cursor: busy ? "not-allowed" : "pointer",
             }}
@@ -420,11 +358,8 @@ export default function App() {
   const [user,    setUser]    = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    return onAuthStateChanged(auth, u => { setUser(u); setLoading(false); });
-  }, []);
+  useEffect(() => onAuthStateChanged(auth, u => { setUser(u); setLoading(false); }), []);
 
-  // スリープ復帰時の再接続
   useEffect(() => {
     const fn = () => { if (document.visibilityState === "visible") enableNetwork(db).catch(()=>{}); };
     document.addEventListener("visibilitychange", fn);
@@ -434,17 +369,15 @@ export default function App() {
 
   if (loading) return (
     <>
-      <style>{GLOBAL_CSS}</style>
-      <div style={{ minHeight:"100vh", background:"#0d1117", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontSize:"17px", fontFamily:"sans-serif" }}>
-        読み込み中...
-      </div>
+      <style>{GCSS}</style>
+      <div style={{ minHeight:"100vh", background:"#0d1117", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontSize:"17px", fontFamily:"sans-serif" }}>読み込み中...</div>
     </>
   );
 
   if (!user) return (
     <LoginScreen
-      onLogin={(e,p) => signInWithEmailAndPassword(auth,e,p)}
-      onSignup={(e,p) => createUserWithEmailAndPassword(auth,e,p)}
+      onLogin={(e,p)  => signInWithEmailAndPassword(auth, e, p)}
+      onSignup={(e,p) => createUserWithEmailAndPassword(auth, e, p)}
     />
   );
 
@@ -457,32 +390,26 @@ export default function App() {
 function Dashboard({ user, onLogout }) {
   const uid = user.uid;
 
-  const [books,        setBooks]       = useState([]);
-  const [weeklyGoal,   setWeeklyGoal]  = useState(DEFAULT_WEEKLY);
-  const [lastMonday,   setLastMonday]  = useState(null);
-  const [todayLog,     setTodayLog]    = useState({ pages:0, startOfDayPages:0 });
-  const [now,          setNow]         = useState(new Date());
-  const [mascotMsg,    setMascotMsg]   = useState("");
-  const [showMascot,   setShowMascot]  = useState(false);
-  const [sync,         setSync]        = useState("ok"); // ok | saving | err
-  const [modal,        setModal]       = useState(null); // null|add|edit|settings
-  const [editBook,     setEditBook]    = useState(null);
-  const [form,         setForm]        = useState({ name:"", total:"", cur:"", img:"" });
-  const [goalForm,     setGoalForm]    = useState("");
-  // 確認ダイアログ
-  const [confirmDel,   setConfirmDel]  = useState(null); // book id or null
-  const [confirmLogout,setConfirmLogout] = useState(false);
+  const [books,       setBooks]       = useState([]);
+  const [weeklyGoal,  setWeeklyGoal]  = useState(DEFAULT_WEEKLY);
+  const [lastMonday,  setLastMonday]  = useState(null);
+  const [todayLog,    setTodayLog]    = useState({ pages:0, startOfDayPages:0 });
+  const [now,         setNow]         = useState(new Date());
+  const [mascotMsg,   setMascotMsg]   = useState("");
+  const [showMascot,  setShowMascot]  = useState(false);
+  const [sync,        setSync]        = useState("ok");
+  const [modal,       setModal]       = useState(null);
+  const [editBook,    setEditBook]    = useState(null);
+  const [form,        setForm]        = useState({ name:"", total:"", cur:"", img:"" });
+  const [goalForm,    setGoalForm]    = useState("");
+  const [confirmDel,  setConfirmDel]  = useState(null);
+  const [confirmOut,  setConfirmOut]  = useState(false);
 
   const msgQ   = useRef(shuffle(MSGS));
   const msgIdx = useRef(0);
 
-  // 時計
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
 
-  // 合格くん
   const nextMsg = useCallback(() => {
     if (msgIdx.current >= msgQ.current.length) { msgQ.current = shuffle(MSGS); msgIdx.current = 0; }
     setMascotMsg(msgQ.current[msgIdx.current++]);
@@ -490,13 +417,9 @@ function Dashboard({ user, onLogout }) {
     setTimeout(() => setShowMascot(false), 4500);
   }, []);
 
-  useEffect(() => {
-    const t = setInterval(nextMsg, 30000);
-    return () => clearInterval(t);
-  }, [nextMsg]);
+  useEffect(() => { const t = setInterval(nextMsg, 30000); return () => clearInterval(t); }, [nextMsg]);
 
-  // ---- Firestore onSnapshot ----
-  // 設定
+  // Firestore同期
   useEffect(() => {
     const p = P(uid);
     return onSnapshot(p.settings, snap => {
@@ -505,48 +428,34 @@ function Dashboard({ user, onLogout }) {
         setWeeklyGoal(d.target ?? DEFAULT_WEEKLY);
         setLastMonday(d.lastResetMonday ?? null);
       } else {
-        // 初回作成
-        setDoc(p.settings, {
-          target: DEFAULT_WEEKLY,
-          lastResetMonday: toMonday(),
-          updatedAt: serverTimestamp(),
-        }).catch(console.error);
+        setDoc(p.settings, { target:DEFAULT_WEEKLY, lastResetMonday:toMonday(), updatedAt:serverTimestamp() }).catch(console.error);
       }
     }, console.error);
   }, [uid]);
 
-  // 教材
   useEffect(() => {
-    const p = P(uid);
-    const q = query(p.tbCol, orderBy("order","asc"));
-    return onSnapshot(q, snap => {
-      setBooks(snap.docs.map(d => ({ id:d.id, ...d.data() })));
-    }, console.error);
+    const q = query(P(uid).tbCol, orderBy("order","asc"));
+    return onSnapshot(q, snap => setBooks(snap.docs.map(d => ({ id:d.id, ...d.data() }))), console.error);
   }, [uid]);
 
-  // 今日ログ
   useEffect(() => {
-    const p = P(uid);
-    return onSnapshot(p.log(toDay()), snap => {
+    return onSnapshot(P(uid).log(toDay()), snap => {
       if (snap.exists()) setTodayLog(snap.data());
     }, console.error);
   }, [uid]);
 
-  // 月曜リセット
   useEffect(() => {
     if (!lastMonday) return;
-    const monday = toMonday();
-    if (lastMonday !== monday) {
-      setDoc(P(uid).settings, { lastResetMonday: monday, updatedAt: serverTimestamp() }, { merge:true }).catch(console.error);
+    const mon = toMonday();
+    if (lastMonday !== mon) {
+      setDoc(P(uid).settings, { lastResetMonday:mon, updatedAt:serverTimestamp() }, { merge:true }).catch(console.error);
     }
   }, [lastMonday]);
 
-  // ---- 計算 ----
-  const totalCur     = books.reduce((s,b) => s+(b.currentPage||0), 0);
-  const todayProgress= Math.max(0, totalCur - (todayLog.startOfDayPages||0));
-  const remaining    = Math.max(0, weeklyGoal - todayProgress);
+  const totalCur      = books.reduce((s,b) => s+(b.currentPage||0), 0);
+  const todayProgress = Math.max(0, totalCur - (todayLog.startOfDayPages||0));
+  const remaining     = Math.max(0, weeklyGoal - todayProgress);
 
-  // ---- 教材保存 ----
   const saveBook = async () => {
     const name = form.name.trim();
     if (!name) return;
@@ -556,75 +465,45 @@ function Dashboard({ user, onLogout }) {
     setModal(null); setSync("saving");
     try {
       if (editBook) {
-        await setDoc(p.tb(editBook.id), {
-          name, totalPages:total, currentPage:cur,
-          imageBase64: form.img || editBook.imageBase64||"",
-          order: editBook.order??Date.now(),
-          updatedAt: serverTimestamp(),
-        }, { merge:true });
+        await setDoc(p.tb(editBook.id), { name, totalPages:total, currentPage:cur, imageBase64:form.img||editBook.imageBase64||"", order:editBook.order??Date.now(), updatedAt:serverTimestamp() }, { merge:true });
       } else {
         const id = `book_${Date.now()}`;
         const maxOrd = books.length ? Math.max(...books.map(b=>b.order??0)) : 0;
-        await setDoc(p.tb(id), {
-          name, totalPages:total, currentPage:cur,
-          imageBase64: form.img||"",
-          order: maxOrd+1,
-          updatedAt: serverTimestamp(),
-        });
-        // 初回ログ設定
-        const logSnap = await import("firebase/firestore").then(({getDoc})=>getDoc(p.log(toDay())));
-        if (!logSnap.exists()) {
-          const startPages = books.reduce((s,b)=>s+(b.currentPage||0),0)+cur;
-          await setDoc(p.log(toDay()), { pages:0, startOfDayPages:startPages, updatedAt:serverTimestamp() });
-        }
+        await setDoc(p.tb(id), { name, totalPages:total, currentPage:cur, imageBase64:form.img||"", order:maxOrd+1, updatedAt:serverTimestamp() });
       }
       setSync("ok");
     } catch(e) { console.error(e); setSync("err"); }
   };
 
-  // ---- 削除 ----
-  const confirmDelete = (id) => setConfirmDel(id);
   const doDelete = async () => {
-    const id = confirmDel;
-    setConfirmDel(null); setModal(null); setSync("saving");
-    try {
-      await deleteDoc(P(uid).tb(id));
-      setSync("ok");
-    } catch(e) { console.error(e); setSync("err"); }
+    const id = confirmDel; setConfirmDel(null); setSync("saving");
+    try { await deleteDoc(P(uid).tb(id)); setSync("ok"); } catch(e) { setSync("err"); }
   };
 
-  // ---- 並べ替え ----
   const moveBook = async (i, dir) => {
     const j = i+dir;
     if (j<0||j>=books.length) return;
-    const p = P(uid); setSync("saving");
+    setSync("saving");
     try {
       await Promise.all([
-        setDoc(p.tb(books[i].id), { order:j }, { merge:true }),
-        setDoc(p.tb(books[j].id), { order:i }, { merge:true }),
+        setDoc(P(uid).tb(books[i].id), { order:j }, { merge:true }),
+        setDoc(P(uid).tb(books[j].id), { order:i }, { merge:true }),
       ]);
       setSync("ok");
     } catch(e) { setSync("err"); }
   };
 
-  // ---- ページ変更 ----
   const changePage = async (book, delta) => {
     const newPage = Math.max(0, Math.min((book.currentPage||0)+delta, book.totalPages||999999));
-    const p = P(uid); setSync("saving");
+    setSync("saving");
     try {
-      await setDoc(p.tb(book.id), { currentPage:newPage, updatedAt:serverTimestamp() }, { merge:true });
+      await setDoc(P(uid).tb(book.id), { currentPage:newPage, updatedAt:serverTimestamp() }, { merge:true });
       const newTotal = books.reduce((s,b) => b.id===book.id ? s+newPage : s+(b.currentPage||0), 0);
-      const todayPg  = Math.max(0, newTotal-(todayLog.startOfDayPages||0));
-      await setDoc(p.log(toDay()), {
-        pages: todayPg,
-        startOfDayPages: todayLog.startOfDayPages||0,
-        updatedAt: serverTimestamp(),
-      }, { merge:true });
+      await setDoc(P(uid).log(toDay()), { pages:Math.max(0,newTotal-(todayLog.startOfDayPages||0)), startOfDayPages:todayLog.startOfDayPages||0, updatedAt:serverTimestamp() }, { merge:true });
       setSync("ok");
     } catch(e) { console.error(e); setSync("err"); }
   };
 
-  // ---- 目標保存 ----
   const saveGoal = async () => {
     const val = parseInt(goalForm);
     if (!val||val<1) return;
@@ -635,109 +514,98 @@ function Dashboard({ user, onLogout }) {
     } catch(e) { setSync("err"); }
   };
 
-  // ---- モーダルを開く ----
   const openAdd = () => { setForm({ name:"",total:"",cur:"",img:"" }); setEditBook(null); setModal("add"); };
   const openEdit = (b) => { setForm({ name:b.name, total:String(b.totalPages||""), cur:String(b.currentPage||""), img:b.imageBase64||"" }); setEditBook(b); setModal("edit"); };
   const openSettings = () => { setGoalForm(String(weeklyGoal)); setModal("settings"); };
 
   const handleImg = async (e) => {
     const f = e.target.files?.[0];
-    if (!f) return;
-    const b64 = await resizeImg(f);
-    setForm(p => ({ ...p, img:b64 }));
+    if (f) { const b64 = await resizeImg(f); setForm(p => ({ ...p, img:b64 })); }
   };
 
-  // 時刻
   const hh = pad(now.getHours()), mm = pad(now.getMinutes()), ss = pad(now.getSeconds());
   const dateStr = `${now.getFullYear()}/${pad(now.getMonth()+1)}/${pad(now.getDate())}(${DAY_JA[now.getDay()]})`;
   const syncColor = sync==="ok" ? "#48bb78" : sync==="saving" ? "#f6ad55" : "#fc8181";
-
-  const font = "'Hiragino Kaku Gothic ProN','Noto Sans JP','Yu Gothic',sans-serif";
+  const font = "'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif";
 
   return (
     <>
-      <style>{GLOBAL_CSS}</style>
+      <style>{GCSS}</style>
 
-      <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#0d1117 0%,#161b27 60%,#1a1f35 100%)", fontFamily:font, color:"#e2e8f0", paddingBottom:"60px" }}>
+      <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#0d1117,#1a1f35)", fontFamily:font, color:"#e2e8f0", paddingBottom:"60px" }}>
 
-        {/* ===== トップバー ===== */}
+        {/* トップバー */}
         <div style={{
           position:"sticky", top:0, zIndex:100,
-          background:"rgba(13,17,23,0.93)",
-          backdropFilter:"blur(12px)",
-          borderBottom:"1px solid rgba(255,255,255,0.07)",
+          background:"#0d1117",
+          borderBottom:"1px solid rgba(255,255,255,0.08)",
           padding:"10px 14px",
           display:"flex", alignItems:"center", gap:"8px",
         }}>
-          <button
-            onClick={nextMsg}
-            style={{ background:"none", border:"none", fontSize:"26px", cursor:"pointer", padding:"4px", lineHeight:1 }}
-          >📚</button>
-
+          <button onClick={nextMsg} style={{ background:"none", border:"none", fontSize:"26px", cursor:"pointer", padding:"4px", lineHeight:1 }}>📚</button>
           <div style={{ flex:1, textAlign:"center" }}>
-            <div style={{ fontSize:"20px", fontWeight:"800", color:"#63b3ed", letterSpacing:"0.04em", lineHeight:1.1 }}>
-              {hh}:{mm}:{ss}
-            </div>
+            <div style={{ fontSize:"20px", fontWeight:"800", color:"#63b3ed", letterSpacing:"0.04em", lineHeight:1.1 }}>{hh}:{mm}:{ss}</div>
             <div style={{ fontSize:"11px", color:"rgba(255,255,255,0.4)", marginTop:"2px" }}>{dateStr}</div>
           </div>
-
           <div style={{ display:"flex", gap:"6px", alignItems:"center" }}>
-            <div style={{ width:"8px", height:"8px", borderRadius:"50%", background:syncColor, boxShadow:`0 0 6px ${syncColor}` }} />
+            <div style={{ width:"8px", height:"8px", borderRadius:"50%", background:syncColor }} />
             <Btn onClick={openSettings} sm>⚙️</Btn>
-            <Btn onClick={() => setConfirmLogout(true)} sm>🚪</Btn>
+            <Btn onClick={() => setConfirmOut(true)} sm>🚪</Btn>
           </div>
         </div>
 
-        {/* ===== 合格くんバブル ===== */}
+        {/* 合格くんバブル */}
         {showMascot && (
           <div style={{
-            position:"fixed", top:"66px", left:"50%", transform:"translateX(-50%)",
+            position:"fixed", top:"64px", left:"50%", transform:"translateX(-50%)",
             zIndex:200, background:"#2d3748",
             border:"1px solid rgba(99,179,237,0.4)", borderRadius:"14px",
             padding:"11px 18px", maxWidth:"88vw",
             fontSize:"14px", color:"#bee3f8",
             boxShadow:"0 8px 28px rgba(0,0,0,0.45)",
-            animation:"fadeIn .3s ease",
           }}>
             {mascotMsg}
           </div>
         )}
 
-        {/* ===== サマリー ===== */}
+        {/* サマリー */}
         <div style={{ padding:"14px", display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px", maxWidth:"600px", margin:"0 auto" }}>
-          <Card icon="📅" label="残ノルマ"   value={remaining}     unit="p" color="#fc8181" />
-          <Card icon="✏️" label="今日の進捗" value={todayProgress}  unit="p" color="#68d391" />
-          <Card icon="🎯" label="週間目標"   value={weeklyGoal}     unit="p" color="#63b3ed" onClick={openSettings} />
-          <Card icon="📖" label="教材数"     value={books.length}   unit="冊" color="#f6ad55" />
+          <SCard icon="📅" label="残ノルマ"   value={remaining}    unit="p"  color="#fc8181" />
+          <SCard icon="✏️" label="今日の進捗" value={todayProgress} unit="p"  color="#68d391" />
+          <SCard icon="🎯" label="週間目標"   value={weeklyGoal}   unit="p"  color="#63b3ed" onClick={openSettings} />
+          <SCard icon="📖" label="教材数"     value={books.length} unit="冊" color="#f6ad55" />
         </div>
 
-        {/* ===== 教材リスト ===== */}
+        {/* 教材リスト */}
         <div style={{ padding:"0 14px 16px", maxWidth:"600px", margin:"0 auto" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"12px" }}>
             <span style={{ fontSize:"15px", fontWeight:"700", color:"rgba(255,255,255,0.75)" }}>📚 教材一覧</span>
             <Btn onClick={openAdd} accent>＋ 追加</Btn>
           </div>
-
           {books.length === 0 ? (
             <div style={{ textAlign:"center", padding:"40px 20px", color:"rgba(255,255,255,0.25)", border:"2px dashed rgba(255,255,255,0.08)", borderRadius:"16px" }}>
               <div style={{ fontSize:"36px", marginBottom:"10px" }}>📭</div>
               <div>「＋ 追加」から教材を登録してください</div>
             </div>
           ) : books.map((b,i) => (
-            <BookCard
-              key={b.id} book={b} index={i} total={books.length}
+            <BookCard key={b.id} book={b} index={i} total={books.length}
               onEdit={() => openEdit(b)}
-              onDelete={() => confirmDelete(b.id)}
+              onDelete={() => setConfirmDel(b.id)}
               onUp={() => moveBook(i,-1)}
               onDown={() => moveBook(i,1)}
-              onPage={delta => changePage(b,delta)}
+              onPage={d => changePage(b,d)}
             />
           ))}
         </div>
 
-        {/* ===== モーダル（追加・編集） ===== */}
+        {/* 追加・編集モーダル */}
         {(modal==="add"||modal==="edit") && (
           <Sheet title={modal==="add" ? "📗 教材を追加" : "✏️ 教材を編集"} onClose={() => setModal(null)}>
+            {/*
+              ★ Safari最重要:
+              Sheetコンポーネントにbackdrop-filterを使わない。
+              inputが正しく動作するには、祖先にfilter/backdrop-filterがないことが必要。
+            */}
             <FInput label="教材名" value={form.name} onChange={v=>setForm(p=>({...p,name:v}))} placeholder="例: 財務会計論テキスト" />
             <FInput label="総ページ数" value={form.total} onChange={v=>setForm(p=>({...p,total:v}))} type="number" placeholder="例: 500" />
             <FInput label="現在のページ" value={form.cur} onChange={v=>setForm(p=>({...p,cur:v}))} type="number" placeholder="例: 120" />
@@ -751,12 +619,12 @@ function Dashboard({ user, onLogout }) {
           </Sheet>
         )}
 
-        {/* ===== 設定モーダル ===== */}
+        {/* 設定モーダル */}
         {modal==="settings" && (
           <Sheet title="⚙️ 設定" onClose={() => setModal(null)}>
             <FInput label="週間目標ページ数" value={goalForm} onChange={setGoalForm} type="number" placeholder="例: 100" />
             <Btn onClick={saveGoal} accent full>保存する</Btn>
-            <div style={{ marginTop:"16px", padding:"12px", background:"rgba(255,255,255,0.04)", borderRadius:"10px", fontSize:"12px", color:"rgba(255,255,255,0.35)", lineHeight:1.9 }}>
+            <div style={{ marginTop:"16px", padding:"12px", background:"rgba(255,255,255,0.04)", borderRadius:"10px", fontSize:"12px", color:"rgba(255,255,255,0.3)", lineHeight:1.9 }}>
               <div>🔑 UID: {uid.slice(0,12)}...</div>
               <div>📡 固定ID: {FIXED_ID}</div>
               <div>📱 同期: {sync==="ok"?"✅ 正常":sync==="saving"?"⏳ 保存中":"❌ エラー"}</div>
@@ -764,31 +632,28 @@ function Dashboard({ user, onLogout }) {
           </Sheet>
         )}
 
-        {/* ===== 削除確認 ===== */}
+        {/* 削除確認 */}
         {confirmDel && (
-          <ConfirmDialog
-            message="この教材を削除しますか？"
+          <ConfirmDlg
+            msg="この教材を削除しますか？"
+            okLabel="削除する"
+            okColor="linear-gradient(135deg,#fc8181,#e53e3e)"
             onOk={doDelete}
             onCancel={() => setConfirmDel(null)}
           />
         )}
 
-        {/* ===== ログアウト確認 ===== */}
-        {confirmLogout && (
-          <LogoutDialog
-            onOk={() => { setConfirmLogout(false); onLogout(); }}
-            onCancel={() => setConfirmLogout(false)}
+        {/* ログアウト確認 */}
+        {confirmOut && (
+          <ConfirmDlg
+            msg="ログアウトしますか？"
+            okLabel="ログアウト"
+            okColor="#4299e1"
+            onOk={() => { setConfirmOut(false); onLogout(); }}
+            onCancel={() => setConfirmOut(false)}
           />
         )}
-
       </div>
-
-      <style>{`
-        @keyframes fadeIn {
-          from { opacity:0; transform:translateX(-50%) translateY(-10px); }
-          to   { opacity:1; transform:translateX(-50%) translateY(0); }
-        }
-      `}</style>
     </>
   );
 }
@@ -799,11 +664,10 @@ function Dashboard({ user, onLogout }) {
 function BookCard({ book, index, total, onEdit, onDelete, onUp, onDown, onPage }) {
   const pct = book.totalPages > 0 ? Math.min(100, Math.round((book.currentPage||0)/book.totalPages*100)) : 0;
   const bar = pct>=100 ? "#68d391" : pct>=50 ? "#63b3ed" : "#f6ad55";
-
   return (
     <div style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"16px", padding:"14px", marginBottom:"10px" }}>
       <div style={{ display:"flex", gap:"12px" }}>
-        <div style={{ width:"44px", height:"60px", borderRadius:"6px", flexShrink:0, background:book.imageBase64?"transparent":"linear-gradient(135deg,#2d3748,#4a5568)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"20px", overflow:"hidden" }}>
+        <div style={{ width:"44px", height:"60px", borderRadius:"6px", flexShrink:0, background:book.imageBase64?"transparent":"#2d3748", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"20px", overflow:"hidden" }}>
           {book.imageBase64 ? <img src={book.imageBase64} alt="" style={{ width:"100%",height:"100%",objectFit:"cover" }} /> : "📗"}
         </div>
         <div style={{ flex:1, minWidth:0 }}>
@@ -814,16 +678,15 @@ function BookCard({ book, index, total, onEdit, onDelete, onUp, onDown, onPage }
           </div>
         </div>
       </div>
-
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:"12px", gap:"6px" }}>
         <div style={{ display:"flex", gap:"5px" }}>
-          {[1,5,10].map(n => <Btn key={n} onClick={() => onPage(n)}  color="#68d391">+{n}</Btn>)}
+          {[1,5,10].map(n => <Btn key={n} onClick={() => onPage(n)} color="#68d391">+{n}</Btn>)}
           <Btn onClick={() => onPage(-1)} color="#fc8181">-1</Btn>
         </div>
         <div style={{ display:"flex", gap:"4px" }}>
-          <Btn onClick={onUp}     disabled={index===0}       color="#a0aec0">▲</Btn>
-          <Btn onClick={onDown}   disabled={index===total-1} color="#a0aec0">▼</Btn>
-          <Btn onClick={onEdit}   color="#63b3ed">✏️</Btn>
+          <Btn onClick={onUp} disabled={index===0} color="#a0aec0">▲</Btn>
+          <Btn onClick={onDown} disabled={index===total-1} color="#a0aec0">▼</Btn>
+          <Btn onClick={onEdit} color="#63b3ed">✏️</Btn>
           <Btn onClick={onDelete} color="#fc8181">🗑</Btn>
         </div>
       </div>
@@ -834,7 +697,7 @@ function BookCard({ book, index, total, onEdit, onDelete, onUp, onDown, onPage }
 // ============================================================
 // サマリーカード
 // ============================================================
-function Card({ icon, label, value, unit, color, onClick }) {
+function SCard({ icon, label, value, unit, color, onClick }) {
   return (
     <div onClick={onClick} style={{ background:"rgba(255,255,255,0.04)", border:`1px solid ${color}28`, borderRadius:"14px", padding:"13px 12px", cursor:onClick?"pointer":"default" }}>
       <div style={{ fontSize:"18px", marginBottom:"4px" }}>{icon}</div>
@@ -848,16 +711,30 @@ function Card({ icon, label, value, unit, color, onClick }) {
 
 // ============================================================
 // ボトムシート
+// ★ Safari対策: backdropFilter絶対に使わない、background単色のみ
 // ============================================================
 function Sheet({ title, children, onClose }) {
   return (
     <div
       onClick={e => e.target===e.currentTarget && onClose()}
-      style={{ position:"fixed", inset:0, zIndex:300, background:"rgba(0,0,0,0.72)", display:"flex", alignItems:"flex-end", justifyContent:"center", backdropFilter:"blur(5px)" }}
+      style={{
+        position:"fixed", inset:0, zIndex:300,
+        background:"rgba(0,0,0,0.75)",
+        display:"flex", alignItems:"flex-end", justifyContent:"center",
+        // ★ backdropFilter: なし（Safari inputバグの原因）
+      }}
     >
-      <div style={{ background:"linear-gradient(160deg,#1a202c,#2d3748)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"20px 20px 0 0", padding:"22px 18px 50px", width:"100%", maxWidth:"500px", maxHeight:"88vh", overflowY:"auto" }}>
+      <div style={{
+        background:"#1e2a3a",  // ★ filter/backdropなしの単色背景
+        border:"1px solid rgba(255,255,255,0.1)",
+        borderRadius:"20px 20px 0 0",
+        padding:"22px 18px 50px",
+        width:"100%", maxWidth:"500px",
+        maxHeight:"88vh", overflowY:"auto",
+        // ★ overflow:hiddenは使わない
+      }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"20px" }}>
-          <span style={{ fontSize:"16px", fontWeight:"700" }}>{title}</span>
+          <span style={{ fontSize:"16px", fontWeight:"700", color:"#e2e8f0" }}>{title}</span>
           <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", fontSize:"22px", cursor:"pointer", padding:"4px", lineHeight:1 }}>✕</button>
         </div>
         {children}
@@ -867,7 +744,8 @@ function Sheet({ title, children, onClose }) {
 }
 
 // ============================================================
-// フォーム入力（Safari対策: labelとinputを同じdiv内で直置き）
+// フォーム入力
+// ★ Safari対策: このコンポーネント内に干渉するスタイル一切なし
 // ============================================================
 function FInput({ label, value, onChange, type="text", placeholder }) {
   return (
@@ -879,14 +757,18 @@ function FInput({ label, value, onChange, type="text", placeholder }) {
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
         inputMode={type==="number" ? "numeric" : undefined}
+        autoComplete="off"
         style={{
-          display:"block", width:"100%",
-          padding:"12px 14px",
-          fontSize:"16px",
-          border:"1px solid rgba(255,255,255,0.13)",
-          borderRadius:"10px",
-          background:"rgba(255,255,255,0.07)",
-          color:"#fff", outline:"none",
+          display: "block",
+          width: "100%",
+          padding: "13px 14px",
+          fontSize: "16px",
+          lineHeight: "1.4",
+          color: "#fff",
+          background: "rgba(255,255,255,0.08)",
+          border: "1px solid rgba(255,255,255,0.15)",
+          borderRadius: "10px",
+          outline: "none",
         }}
       />
     </div>
@@ -894,34 +776,37 @@ function FInput({ label, value, onChange, type="text", placeholder }) {
 }
 
 // ============================================================
-// 汎用ボタン
+// ボタン
 // ============================================================
 function Btn({ children, onClick, color="#63b3ed", disabled=false, accent=false, sm=false, full=false }) {
-  const bg = accent ? "linear-gradient(135deg,#63b3ed,#4299e1)" : disabled ? "rgba(255,255,255,0.04)" : `${color}18`;
-  const bc = disabled ? "rgba(255,255,255,0.05)" : accent ? "transparent" : `${color}45`;
-  const cl = disabled ? "rgba(255,255,255,0.2)" : accent ? "#fff" : color;
-
   return (
     <button
       onClick={disabled ? undefined : onClick}
       style={{
-        background:bg, border:`1px solid ${bc}`, borderRadius:"8px",
+        background: accent ? "#4299e1" : disabled ? "rgba(255,255,255,0.04)" : `${color}18`,
+        border: `1px solid ${disabled ? "rgba(255,255,255,0.05)" : accent ? "transparent" : color+"45"}`,
+        borderRadius:"8px",
         padding: sm ? "6px 9px" : "7px 11px",
-        color:cl, fontSize:"13px", fontWeight:"700",
+        color: disabled ? "rgba(255,255,255,0.2)" : accent ? "#fff" : color,
+        fontSize:"13px", fontWeight:"700",
         cursor: disabled ? "not-allowed" : "pointer",
         minWidth: full ? "auto" : "34px",
         width: full ? "100%" : undefined,
-        boxShadow: accent ? "0 3px 10px rgba(66,153,225,0.3)" : "none",
-        transition:"transform .1s",
+        display: full ? "block" : undefined,
       }}
-      onPointerDown={e => { if(!disabled) e.currentTarget.style.transform="scale(0.91)"; }}
-      onPointerUp={e => { e.currentTarget.style.transform="scale(1)"; }}
-      onPointerLeave={e => { e.currentTarget.style.transform="scale(1)"; }}
+      onPointerDown={e => { if(!disabled) e.currentTarget.style.opacity="0.7"; }}
+      onPointerUp={e => { e.currentTarget.style.opacity="1"; }}
+      onPointerLeave={e => { e.currentTarget.style.opacity="1"; }}
     >
       {children}
     </button>
   );
 }
 
-// スタイル定数
-const LS = { display:"block", color:"rgba(255,255,255,0.6)", fontSize:"13px", fontWeight:"600", marginBottom:"6px" };
+const LS = {
+  display:"block",
+  color:"rgba(255,255,255,0.65)",
+  fontSize:"14px",
+  fontWeight:"600",
+  marginBottom:"7px",
+};
