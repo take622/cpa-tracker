@@ -1,7 +1,9 @@
 // ============================================================
-// CPA Study Tracker - App.jsx
-// Firebase Firestore リアルタイム同期版
-// FIXED_ID: CPA_ROOT_V7000 (ハードコード固定)
+// CPA Study Tracker - App.jsx 最終版
+// ・Safari入力問題完全対応
+// ・ログアウト・削除確認ダイアログ
+// ・Firestore リアルタイム同期
+// FIXED_ID: CPA_ROOT_V7000 (ハードコード固定・絶対変更しない)
 // ============================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -27,366 +29,452 @@ import {
 } from "firebase/firestore";
 
 // ============================================================
-// Firebase 設定（ハードコード固定 - 絶対に変更しないこと）
+// Firebase設定（ハードコード固定）
 // ============================================================
-const firebaseConfig = {
+const FIREBASE_CONFIG = {
   apiKey: "AIzaSyBgPwP-30BuXvuydRe6NsYJInMVMlmaWsE",
   authDomain: "cpa-tracker-a0f14.firebaseapp.com",
-  databaseURL: "https://cpa-tracker-a0f14-default-rtdb.firebaseio.com",
   projectId: "cpa-tracker-a0f14",
   storageBucket: "cpa-tracker-a0f14.firebasestorage.app",
   messagingSenderId: "77528125896",
   appId: "1:77528125896:web:13829c71b21a7870d870fd",
-  measurementId: "G-FNL3C7R07M",
 };
 
-// ============================================================
-// 定数（絶対に変更しないこと - 同期の鍵）
-// ============================================================
-const FIXED_ID = "CPA_ROOT_V7000";
-const BASE_WEEKLY_TARGET = 100;
+const FIXED_ID = "CPA_ROOT_V7000"; // 絶対変更禁止
+const DEFAULT_WEEKLY = 100;
+const DAY_JA = ["日","月","火","水","木","金","土"];
 
-// Firebase 初期化（重複初期化防止）
-const firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-const auth = getAuth(firebaseApp);
-const db = getFirestore(firebaseApp);
+// Firebase初期化（重複防止）
+const fbApp = getApps().length === 0 ? initializeApp(FIREBASE_CONFIG) : getApps()[0];
+const auth  = getAuth(fbApp);
+const db    = getFirestore(fbApp);
 
-// ============================================================
-// Firestoreパスヘルパー（UIDを受け取って毎回生成）
-// ============================================================
-const getPaths = (uid) => ({
-  settings: doc(db, `artifacts/${FIXED_ID}/users/${uid}/settings/weeklyGoal`),
-  textbook: (id) => doc(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks/${id}`),
-  textbooksCol: collection(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks`),
-  dailyLog: (date) => doc(db, `artifacts/${FIXED_ID}/users/${uid}/dailyLogs/${date}`),
+// Firestoreパス生成
+const P = (uid) => ({
+  settings:    doc(db, `artifacts/${FIXED_ID}/users/${uid}/settings/weeklyGoal`),
+  tbCol:       collection(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks`),
+  tb:    (id)  => doc(db, `artifacts/${FIXED_ID}/users/${uid}/textbooks/${id}`),
+  log:   (dt)  => doc(db, `artifacts/${FIXED_ID}/users/${uid}/dailyLogs/${dt}`),
 });
 
-// ============================================================
-// 励ましメッセージ
-// ============================================================
-const MESSAGES = [
+// 日付
+const toDay = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+};
+const toMonday = () => {
+  const d = new Date();
+  const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
+  d.setDate(d.getDate() + diff);
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+};
+const pad = (n) => String(n).padStart(2,"0");
+
+// 画像リサイズ
+const resizeImg = (file) => new Promise((res) => {
+  const r = new FileReader();
+  r.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const [maxW, maxH] = [200, 200];
+      let w = img.width, h = img.height;
+      if (w > maxW) { h = h * maxW / w; w = maxW; }
+      if (h > maxH) { w = w * maxH / h; h = maxH; }
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      res(c.toDataURL("image/jpeg", 0.7));
+    };
+    img.src = e.target.result;
+  };
+  r.readAsDataURL(file);
+});
+
+// メッセージ
+const MSGS = [
   "今日も一歩前進！合格まであと少し！",
   "継続は力なり。君なら絶対できる！",
-  "難しい問題も、積み重ねで必ず解けるようになる！",
+  "難しい問題も積み重ねで必ず解ける！",
   "一日一日を大切に。合格は目の前だ！",
   "諦めなければ必ず道は開ける！",
   "今の努力が未来の自分を救う！",
-  "休憩も大事。でも戻ってきた君は強い！",
   "合格くんはいつも君の味方だぞ！",
-  "小さな積み重ねが大きな結果につながる！",
+  "小さな積み重ねが大きな結果に！",
   "今日の頑張りを明日の自分が感謝する！",
   "財務諸表も最初は誰でも苦手。大丈夫！",
-  "監査論、管理会計…全部マスターしよう！",
 ];
-
-function shuffleArray(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+const shuffle = (a) => {
+  const b = [...a];
+  for (let i = b.length-1; i > 0; i--) {
+    const j = Math.floor(Math.random()*(i+1));
+    [b[i],b[j]] = [b[j],b[i]];
   }
-  return a;
-}
+  return b;
+};
 
 // ============================================================
-// 日付ユーティリティ
+// グローバルスタイル（一度だけ挿入）
 // ============================================================
-const DAY_NAMES = ["日", "月", "火", "水", "木", "金", "土"];
-
-function getTodayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function getThisMondayStr() {
-  const d = new Date();
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-// ============================================================
-// 画像リサイズ（Base64）
-// ============================================================
-function resizeImage(file, maxW = 200, maxH = 200, quality = 0.7) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        let w = img.width, h = img.height;
-        if (w > maxW) { h = (h * maxW) / w; w = maxW; }
-        if (h > maxH) { w = (w * maxH) / h; h = maxH; }
-        canvas.width = w; canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL("image/jpeg", quality));
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-// ============================================================
-// ログイン画面（プレーンHTML構造 - iOSズーム・入力問題対策済み）
-// ============================================================
-function LoginScreen({ onLogin, onSignup }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [isSignup, setIsSignup] = useState(false);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async () => {
-    setError("");
-    setLoading(true);
-    try {
-      if (isSignup) {
-        await onSignup(email, password);
-      } else {
-        await onLogin(email, password);
-      }
-    } catch (e) {
-      const msgs = {
-        "auth/user-not-found": "メールアドレスが見つかりません",
-        "auth/wrong-password": "パスワードが間違っています",
-        "auth/email-already-in-use": "このメールアドレスは既に使用されています",
-        "auth/invalid-email": "メールアドレスの形式が正しくありません",
-        "auth/weak-password": "パスワードは6文字以上で入力してください",
-        "auth/invalid-credential": "メールアドレスまたはパスワードが間違っています",
-      };
-      setError(msgs[e.code] || "エラー: " + e.message);
-    } finally {
-      setLoading(false);
+const GLOBAL_CSS = `
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: #0d1117; }
+  input, textarea, select {
+    font-size: 16px !important;
+    -webkit-appearance: none;
+    appearance: none;
+    border-radius: 10px;
+  }
+  /* Safari フォーカス時のズーム完全防止 */
+  @media screen and (-webkit-min-device-pixel-ratio: 0) {
+    select, textarea, input {
+      font-size: 16px !important;
     }
-  };
+  }
+`;
 
-  const containerStyle = {
-    minHeight: "100vh",
-    background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "20px",
-    fontFamily: "'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif",
-  };
-
-  const cardStyle = {
-    background: "rgba(255,255,255,0.06)",
-    backdropFilter: "blur(20px)",
-    border: "1px solid rgba(255,255,255,0.12)",
-    borderRadius: "20px",
-    padding: "40px 28px",
-    width: "100%",
-    maxWidth: "380px",
-    boxShadow: "0 25px 50px rgba(0,0,0,0.5)",
-  };
-
-  const inputStyle = {
-    width: "100%",
-    padding: "13px 14px",
-    fontSize: "16px", // iOSズーム防止（16px以上必須）
-    border: "1px solid rgba(255,255,255,0.18)",
-    borderRadius: "10px",
-    background: "rgba(255,255,255,0.08)",
-    color: "#fff",
-    outline: "none",
-    boxSizing: "border-box",
-    WebkitAppearance: "none",
-  };
-
+// ============================================================
+// カスタム確認ダイアログ（window.confirmの代替 - Safari対応）
+// ============================================================
+function ConfirmDialog({ message, onOk, onCancel }) {
   return (
-    <div style={containerStyle}>
-      <div style={cardStyle}>
-        <div style={{ textAlign: "center", marginBottom: "32px" }}>
-          <div style={{ fontSize: "52px", marginBottom: "10px" }}>📚</div>
-          <h1 style={{ color: "#fff", fontSize: "22px", fontWeight: "700", margin: "0 0 6px" }}>
-            CPA Study Tracker
-          </h1>
-          <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "13px", margin: 0 }}>
-            合格への道を、一緒に歩もう
-          </p>
-        </div>
-
-        {/* タブ */}
-        <div style={{
-          display: "flex",
-          background: "rgba(0,0,0,0.3)",
-          borderRadius: "10px",
-          padding: "4px",
-          marginBottom: "24px",
+    <div
+      style={{
+        position:"fixed", inset:0, zIndex:9999,
+        background:"rgba(0,0,0,0.75)",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        padding:"20px",
+      }}
+    >
+      <div style={{
+        background:"#1e2533",
+        border:"1px solid rgba(255,255,255,0.15)",
+        borderRadius:"16px",
+        padding:"24px 20px",
+        width:"100%", maxWidth:"320px",
+        textAlign:"center",
+      }}>
+        <p style={{
+          color:"#e2e8f0", fontSize:"16px", lineHeight:1.6,
+          margin:"0 0 24px",
         }}>
-          {["ログイン", "新規登録"].map((label, i) => (
-            <button
-              key={i}
-              onClick={() => { setIsSignup(i === 1); setError(""); }}
-              style={{
-                flex: 1,
-                padding: "10px",
-                border: "none",
-                borderRadius: "8px",
-                cursor: "pointer",
-                fontSize: "14px",
-                fontWeight: "600",
-                background: isSignup === (i === 1) ? "rgba(99,179,237,0.9)" : "transparent",
-                color: isSignup === (i === 1) ? "#1a1a2e" : "rgba(255,255,255,0.55)",
-                transition: "all 0.2s",
-                WebkitTapHighlightColor: "transparent",
-              }}
-            >
-              {label}
-            </button>
-          ))}
+          {message}
+        </p>
+        <div style={{ display:"flex", gap:"10px" }}>
+          <button
+            onClick={onCancel}
+            style={{
+              flex:1, padding:"13px",
+              background:"rgba(255,255,255,0.08)",
+              border:"1px solid rgba(255,255,255,0.15)",
+              borderRadius:"10px",
+              color:"rgba(255,255,255,0.7)",
+              fontSize:"15px", fontWeight:"600",
+              cursor:"pointer",
+            }}
+          >
+            キャンセル
+          </button>
+          <button
+            onClick={onOk}
+            style={{
+              flex:1, padding:"13px",
+              background:"linear-gradient(135deg,#fc8181,#e53e3e)",
+              border:"none",
+              borderRadius:"10px",
+              color:"#fff",
+              fontSize:"15px", fontWeight:"700",
+              cursor:"pointer",
+            }}
+          >
+            削除する
+          </button>
         </div>
+      </div>
+    </div>
+  );
+}
 
-        <div style={{ marginBottom: "14px" }}>
-          <label style={{ display: "block", color: "rgba(255,255,255,0.65)", fontSize: "13px", marginBottom: "6px" }}>
-            メールアドレス
-          </label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="example@email.com"
-            autoComplete="email"
-            style={inputStyle}
-          />
+function LogoutDialog({ onOk, onCancel }) {
+  return (
+    <div
+      style={{
+        position:"fixed", inset:0, zIndex:9999,
+        background:"rgba(0,0,0,0.75)",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        padding:"20px",
+      }}
+    >
+      <div style={{
+        background:"#1e2533",
+        border:"1px solid rgba(255,255,255,0.15)",
+        borderRadius:"16px",
+        padding:"24px 20px",
+        width:"100%", maxWidth:"320px",
+        textAlign:"center",
+      }}>
+        <p style={{
+          color:"#e2e8f0", fontSize:"16px", lineHeight:1.6,
+          margin:"0 0 24px",
+        }}>
+          ログアウトしますか？
+        </p>
+        <div style={{ display:"flex", gap:"10px" }}>
+          <button
+            onClick={onCancel}
+            style={{
+              flex:1, padding:"13px",
+              background:"rgba(255,255,255,0.08)",
+              border:"1px solid rgba(255,255,255,0.15)",
+              borderRadius:"10px",
+              color:"rgba(255,255,255,0.7)",
+              fontSize:"15px", fontWeight:"600",
+              cursor:"pointer",
+            }}
+          >
+            キャンセル
+          </button>
+          <button
+            onClick={onOk}
+            style={{
+              flex:1, padding:"13px",
+              background:"linear-gradient(135deg,#63b3ed,#4299e1)",
+              border:"none",
+              borderRadius:"10px",
+              color:"#fff",
+              fontSize:"15px", fontWeight:"700",
+              cursor:"pointer",
+            }}
+          >
+            ログアウト
+          </button>
         </div>
-
-        <div style={{ marginBottom: "22px" }}>
-          <label style={{ display: "block", color: "rgba(255,255,255,0.65)", fontSize: "13px", marginBottom: "6px" }}>
-            パスワード
-          </label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="6文字以上"
-            autoComplete={isSignup ? "new-password" : "current-password"}
-            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            style={inputStyle}
-          />
-        </div>
-
-        {error && (
-          <div style={{
-            background: "rgba(239,68,68,0.15)",
-            border: "1px solid rgba(239,68,68,0.35)",
-            borderRadius: "8px",
-            padding: "10px 14px",
-            color: "#fca5a5",
-            fontSize: "13px",
-            marginBottom: "14px",
-          }}>
-            {error}
-          </div>
-        )}
-
-        <button
-          onClick={handleSubmit}
-          disabled={loading}
-          style={{
-            width: "100%",
-            padding: "14px",
-            fontSize: "16px",
-            fontWeight: "700",
-            border: "none",
-            borderRadius: "10px",
-            cursor: loading ? "not-allowed" : "pointer",
-            background: loading ? "rgba(99,179,237,0.35)" : "linear-gradient(135deg, #63b3ed, #4299e1)",
-            color: "#fff",
-            boxShadow: loading ? "none" : "0 4px 15px rgba(66,153,225,0.35)",
-            WebkitTapHighlightColor: "transparent",
-          }}
-        >
-          {loading ? "処理中..." : isSignup ? "アカウント作成" : "ログイン"}
-        </button>
       </div>
     </div>
   );
 }
 
 // ============================================================
-// ルートコンポーネント
+// ログイン画面
+// Safari対策: input要素を直接divの子に置く。親にpointer-events等一切なし。
 // ============================================================
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
+function LoginScreen({ onLogin, onSignup }) {
+  const [email, setEmail]       = useState("");
+  const [pass,  setPass]        = useState("");
+  const [isNew, setIsNew]       = useState(false);
+  const [err,   setErr]         = useState("");
+  const [busy,  setBusy]        = useState(false);
 
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthLoading(false);
-    });
-    return unsub;
-  }, []);
+  const submit = async () => {
+    if (!email || !pass) { setErr("メールとパスワードを入力してください"); return; }
+    setErr(""); setBusy(true);
+    try {
+      isNew
+        ? await onSignup(email, pass)
+        : await onLogin(email, pass);
+    } catch(e) {
+      const m = {
+        "auth/user-not-found":       "メールアドレスが見つかりません",
+        "auth/wrong-password":       "パスワードが間違っています",
+        "auth/invalid-credential":   "メールまたはパスワードが間違っています",
+        "auth/email-already-in-use": "このメールは既に使用されています",
+        "auth/weak-password":        "パスワードは6文字以上にしてください",
+        "auth/invalid-email":        "メールアドレスの形式が正しくありません",
+      };
+      setErr(m[e.code] || e.message);
+    } finally { setBusy(false); }
+  };
 
-  // スマホスリープ復帰時のFirebase再接続（オフラインエラー対策）
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") {
-        enableNetwork(db).catch(() => {});
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-    const timer = setInterval(() => enableNetwork(db).catch(() => {}), 60000);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibility);
-      clearInterval(timer);
-    };
-  }, []);
-
-  if (authLoading) {
-    return (
+  return (
+    <>
+      <style>{GLOBAL_CSS}</style>
+      {/* 
+        Safari入力対策:
+        - このdivにはuserSelect/pointerEvents等の阻害スタイル一切なし
+        - inputは必ずfontSize:16px
+        - onTouchStart等の干渉イベントなし
+      */}
       <div style={{
-        minHeight: "100vh",
-        background: "linear-gradient(135deg, #1a1a2e, #0f3460)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        color: "#fff", fontSize: "18px",
-        fontFamily: "sans-serif",
+        minHeight:"100vh",
+        background:"linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%)",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        padding:"24px 16px",
+        fontFamily:"'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif",
       }}>
-        読み込み中...
+        <div style={{
+          width:"100%", maxWidth:"360px",
+          background:"rgba(255,255,255,0.06)",
+          border:"1px solid rgba(255,255,255,0.12)",
+          borderRadius:"20px",
+          padding:"36px 24px 40px",
+        }}>
+          {/* ロゴ */}
+          <div style={{ textAlign:"center", marginBottom:"28px" }}>
+            <div style={{ fontSize:"50px", lineHeight:1, marginBottom:"10px" }}>📚</div>
+            <div style={{ color:"#fff", fontSize:"20px", fontWeight:"700" }}>CPA Study Tracker</div>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:"12px", marginTop:"4px" }}>合格への道を、一緒に歩もう</div>
+          </div>
+
+          {/* タブ */}
+          <div style={{
+            display:"flex", background:"rgba(0,0,0,0.35)",
+            borderRadius:"10px", padding:"4px", marginBottom:"22px",
+          }}>
+            {["ログイン","新規登録"].map((l,i) => (
+              <button
+                key={i}
+                onClick={() => { setIsNew(i===1); setErr(""); }}
+                style={{
+                  flex:1, padding:"10px", border:"none", borderRadius:"7px",
+                  fontSize:"14px", fontWeight:"600", cursor:"pointer",
+                  background: isNew===(i===1) ? "rgba(99,179,237,0.9)" : "transparent",
+                  color:      isNew===(i===1) ? "#1a1a2e" : "rgba(255,255,255,0.55)",
+                }}
+              >{l}</button>
+            ))}
+          </div>
+
+          {/* メール */}
+          <div style={{ marginBottom:"14px" }}>
+            <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"13px", marginBottom:"6px" }}>
+              メールアドレス
+            </label>
+            {/* ★ inputを直置き・fontSize16px・余計なラッパーなし */}
+            <input
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="example@email.com"
+              style={{
+                display:"block",
+                width:"100%",
+                padding:"13px 14px",
+                fontSize:"16px",
+                background:"rgba(255,255,255,0.1)",
+                border:"1px solid rgba(255,255,255,0.18)",
+                borderRadius:"10px",
+                color:"#fff",
+                outline:"none",
+              }}
+            />
+          </div>
+
+          {/* パスワード */}
+          <div style={{ marginBottom:"20px" }}>
+            <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"13px", marginBottom:"6px" }}>
+              パスワード
+            </label>
+            <input
+              type="password"
+              autoComplete={isNew ? "new-password" : "current-password"}
+              value={pass}
+              onChange={e => setPass(e.target.value)}
+              onKeyDown={e => e.key==="Enter" && submit()}
+              placeholder="6文字以上"
+              style={{
+                display:"block",
+                width:"100%",
+                padding:"13px 14px",
+                fontSize:"16px",
+                background:"rgba(255,255,255,0.1)",
+                border:"1px solid rgba(255,255,255,0.18)",
+                borderRadius:"10px",
+                color:"#fff",
+                outline:"none",
+              }}
+            />
+          </div>
+
+          {err && (
+            <div style={{
+              background:"rgba(239,68,68,0.15)",
+              border:"1px solid rgba(239,68,68,0.3)",
+              borderRadius:"8px", padding:"10px 14px",
+              color:"#fca5a5", fontSize:"13px", marginBottom:"14px",
+            }}>{err}</div>
+          )}
+
+          <button
+            onClick={submit}
+            disabled={busy}
+            style={{
+              display:"block", width:"100%", padding:"14px",
+              fontSize:"16px", fontWeight:"700",
+              background: busy ? "rgba(99,179,237,0.3)" : "linear-gradient(135deg,#63b3ed,#4299e1)",
+              border:"none", borderRadius:"10px", color:"#fff",
+              cursor: busy ? "not-allowed" : "pointer",
+            }}
+          >
+            {busy ? "処理中..." : isNew ? "アカウント作成" : "ログイン"}
+          </button>
+        </div>
       </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <LoginScreen
-        onLogin={(email, pw) => signInWithEmailAndPassword(auth, email, pw)}
-        onSignup={(email, pw) => createUserWithEmailAndPassword(auth, email, pw)}
-      />
-    );
-  }
-
-  return <MainDashboard user={user} onLogout={() => signOut(auth)} />;
+    </>
+  );
 }
 
 // ============================================================
-// メインダッシュボード
+// ルート
 // ============================================================
-function MainDashboard({ user, onLogout }) {
+export default function App() {
+  const [user,    setUser]    = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    return onAuthStateChanged(auth, u => { setUser(u); setLoading(false); });
+  }, []);
+
+  // スリープ復帰時の再接続
+  useEffect(() => {
+    const fn = () => { if (document.visibilityState === "visible") enableNetwork(db).catch(()=>{}); };
+    document.addEventListener("visibilitychange", fn);
+    const t = setInterval(() => enableNetwork(db).catch(()=>{}), 60000);
+    return () => { document.removeEventListener("visibilitychange", fn); clearInterval(t); };
+  }, []);
+
+  if (loading) return (
+    <>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ minHeight:"100vh", background:"#0d1117", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontSize:"17px", fontFamily:"sans-serif" }}>
+        読み込み中...
+      </div>
+    </>
+  );
+
+  if (!user) return (
+    <LoginScreen
+      onLogin={(e,p) => signInWithEmailAndPassword(auth,e,p)}
+      onSignup={(e,p) => createUserWithEmailAndPassword(auth,e,p)}
+    />
+  );
+
+  return <Dashboard user={user} onLogout={() => signOut(auth)} />;
+}
+
+// ============================================================
+// ダッシュボード
+// ============================================================
+function Dashboard({ user, onLogout }) {
   const uid = user.uid;
 
-  const [textbooks, setTextbooks] = useState([]);
-  const [weeklyGoal, setWeeklyGoal] = useState(BASE_WEEKLY_TARGET);
-  const [lastResetMonday, setLastResetMonday] = useState(null);
-  const [todayLog, setTodayLog] = useState({ pages: 0, startOfDayPages: 0 });
-  const [now, setNow] = useState(new Date());
-  const [mascotMsg, setMascotMsg] = useState("");
-  const [showMascot, setShowMascot] = useState(false);
-  const [syncStatus, setSyncStatus] = useState("synced");
-  const [modal, setModal] = useState(null);
-  const [editTarget, setEditTarget] = useState(null);
-  const [bookForm, setBookForm] = useState({ name: "", totalPages: "", currentPage: "", imageBase64: "" });
-  const [goalForm, setGoalForm] = useState("");
+  const [books,        setBooks]       = useState([]);
+  const [weeklyGoal,   setWeeklyGoal]  = useState(DEFAULT_WEEKLY);
+  const [lastMonday,   setLastMonday]  = useState(null);
+  const [todayLog,     setTodayLog]    = useState({ pages:0, startOfDayPages:0 });
+  const [now,          setNow]         = useState(new Date());
+  const [mascotMsg,    setMascotMsg]   = useState("");
+  const [showMascot,   setShowMascot]  = useState(false);
+  const [sync,         setSync]        = useState("ok"); // ok | saving | err
+  const [modal,        setModal]       = useState(null); // null|add|edit|settings
+  const [editBook,     setEditBook]    = useState(null);
+  const [form,         setForm]        = useState({ name:"", total:"", cur:"", img:"" });
+  const [goalForm,     setGoalForm]    = useState("");
+  // 確認ダイアログ
+  const [confirmDel,   setConfirmDel]  = useState(null); // book id or null
+  const [confirmLogout,setConfirmLogout] = useState(false);
 
-  const msgQueue = useRef(shuffleArray(MESSAGES));
-  const msgIndex = useRef(0);
-  const textbooksRef = useRef([]);
-  textbooksRef.current = textbooks;
+  const msgQ   = useRef(shuffle(MSGS));
+  const msgIdx = useRef(0);
 
   // 時計
   useEffect(() => {
@@ -394,440 +482,349 @@ function MainDashboard({ user, onLogout }) {
     return () => clearInterval(t);
   }, []);
 
-  // 合格くん自動メッセージ
-  const showNextMessage = useCallback(() => {
-    if (msgIndex.current >= msgQueue.current.length) {
-      msgQueue.current = shuffleArray(MESSAGES);
-      msgIndex.current = 0;
-    }
-    setMascotMsg(msgQueue.current[msgIndex.current++]);
+  // 合格くん
+  const nextMsg = useCallback(() => {
+    if (msgIdx.current >= msgQ.current.length) { msgQ.current = shuffle(MSGS); msgIdx.current = 0; }
+    setMascotMsg(msgQ.current[msgIdx.current++]);
     setShowMascot(true);
     setTimeout(() => setShowMascot(false), 4500);
   }, []);
 
   useEffect(() => {
-    const t = setInterval(showNextMessage, 30000);
+    const t = setInterval(nextMsg, 30000);
     return () => clearInterval(t);
-  }, [showNextMessage]);
+  }, [nextMsg]);
 
-  // --- Firestore リアルタイム同期: 設定 ---
+  // ---- Firestore onSnapshot ----
+  // 設定
   useEffect(() => {
-    const p = getPaths(uid);
-    const unsub = onSnapshot(
-      p.settings,
-      (snap) => {
-        if (snap.exists()) {
-          const d = snap.data();
-          setWeeklyGoal(d.target ?? BASE_WEEKLY_TARGET);
-          setLastResetMonday(d.lastResetMonday ?? null);
-        } else {
-          // 初回: 設定を作成
-          const monday = getThisMondayStr();
-          setDoc(p.settings, {
-            target: BASE_WEEKLY_TARGET,
-            lastResetMonday: monday,
-            weeklyPages: 0,
-            updatedAt: serverTimestamp(),
-          }).catch(console.error);
-        }
-      },
-      (err) => console.error("settings:", err)
-    );
-    return unsub;
+    const p = P(uid);
+    return onSnapshot(p.settings, snap => {
+      if (snap.exists()) {
+        const d = snap.data();
+        setWeeklyGoal(d.target ?? DEFAULT_WEEKLY);
+        setLastMonday(d.lastResetMonday ?? null);
+      } else {
+        // 初回作成
+        setDoc(p.settings, {
+          target: DEFAULT_WEEKLY,
+          lastResetMonday: toMonday(),
+          updatedAt: serverTimestamp(),
+        }).catch(console.error);
+      }
+    }, console.error);
   }, [uid]);
 
-  // --- Firestore リアルタイム同期: 教材 ---
+  // 教材
   useEffect(() => {
-    const p = getPaths(uid);
-    const q = query(p.textbooksCol, orderBy("order", "asc"));
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        setTextbooks(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      },
-      (err) => console.error("textbooks:", err)
-    );
-    return unsub;
+    const p = P(uid);
+    const q = query(p.tbCol, orderBy("order","asc"));
+    return onSnapshot(q, snap => {
+      setBooks(snap.docs.map(d => ({ id:d.id, ...d.data() })));
+    }, console.error);
   }, [uid]);
 
-  // --- Firestore リアルタイム同期: 今日のログ ---
+  // 今日ログ
   useEffect(() => {
-    const p = getPaths(uid);
-    const today = getTodayStr();
-    const unsub = onSnapshot(
-      p.dailyLog(today),
-      (snap) => {
-        if (snap.exists()) {
-          setTodayLog(snap.data());
-        }
-        // 存在しない場合は textbooks ロード後に初期化する
-      },
-      (err) => console.error("dailyLog:", err)
-    );
-    return unsub;
+    const p = P(uid);
+    return onSnapshot(p.log(toDay()), snap => {
+      if (snap.exists()) setTodayLog(snap.data());
+    }, console.error);
   }, [uid]);
-
-  // 日次ログ初期化（教材ロード後）
-  useEffect(() => {
-    if (textbooks.length === 0) return;
-    const today = getTodayStr();
-    const p = getPaths(uid);
-    // すでにログがあれば何もしない
-    if (todayLog.startOfDayPages !== undefined && todayLog.startOfDayPages > 0) return;
-
-    // 初回の場合のみ現在ページ合計をスナップショット
-    const startPages = textbooks.reduce((s, b) => s + (b.currentPage || 0), 0);
-    if (startPages > 0 && todayLog.startOfDayPages === 0) {
-      setDoc(p.dailyLog(today), {
-        pages: 0,
-        startOfDayPages: startPages,
-        updatedAt: serverTimestamp(),
-      }, { merge: true }).catch(console.error);
-    }
-  }, [textbooks.length > 0]);
 
   // 月曜リセット
   useEffect(() => {
-    if (lastResetMonday === null) return;
-    const monday = getThisMondayStr();
-    if (lastResetMonday !== monday) {
-      const p = getPaths(uid);
-      setDoc(p.settings, {
-        target: weeklyGoal,
-        lastResetMonday: monday,
-        weeklyPages: 0,
-        updatedAt: serverTimestamp(),
-      }, { merge: true }).catch(console.error);
+    if (!lastMonday) return;
+    const monday = toMonday();
+    if (lastMonday !== monday) {
+      setDoc(P(uid).settings, { lastResetMonday: monday, updatedAt: serverTimestamp() }, { merge:true }).catch(console.error);
     }
-  }, [lastResetMonday]);
+  }, [lastMonday]);
 
-  // --- 計算値 ---
-  const totalCurrentPages = textbooks.reduce((s, b) => s + (b.currentPage || 0), 0);
-  const todayProgress = Math.max(0, totalCurrentPages - (todayLog.startOfDayPages || 0));
-  const remainingNorma = Math.max(0, weeklyGoal - todayProgress);
+  // ---- 計算 ----
+  const totalCur     = books.reduce((s,b) => s+(b.currentPage||0), 0);
+  const todayProgress= Math.max(0, totalCur - (todayLog.startOfDayPages||0));
+  const remaining    = Math.max(0, weeklyGoal - todayProgress);
 
-  // --- 教材保存（UIを即座に閉じる非同期保存）---
+  // ---- 教材保存 ----
   const saveBook = async () => {
-    const name = bookForm.name.trim();
+    const name = form.name.trim();
     if (!name) return;
-    const totalPages = parseInt(bookForm.totalPages) || 0;
-    const currentPage = Math.min(parseInt(bookForm.currentPage) || 0, totalPages || Infinity);
-    const p = getPaths(uid);
-
-    // 先にモーダルを閉じる
-    setModal(null);
-    setEditTarget(null);
-    setSyncStatus("saving");
-
+    const total = parseInt(form.total)||0;
+    const cur   = Math.min(parseInt(form.cur)||0, total||999999);
+    const p = P(uid);
+    setModal(null); setSync("saving");
     try {
-      if (editTarget) {
-        await setDoc(p.textbook(editTarget.id), {
-          name, totalPages, currentPage,
-          imageBase64: bookForm.imageBase64 || editTarget.imageBase64 || "",
-          order: editTarget.order ?? Date.now(),
+      if (editBook) {
+        await setDoc(p.tb(editBook.id), {
+          name, totalPages:total, currentPage:cur,
+          imageBase64: form.img || editBook.imageBase64||"",
+          order: editBook.order??Date.now(),
           updatedAt: serverTimestamp(),
-        }, { merge: true });
+        }, { merge:true });
       } else {
-        const newId = `book_${Date.now()}`;
-        const maxOrder = textbooks.length > 0
-          ? Math.max(...textbooks.map((b) => b.order ?? 0))
-          : 0;
-        await setDoc(p.textbook(newId), {
-          name, totalPages, currentPage,
-          imageBase64: bookForm.imageBase64 || "",
-          order: maxOrder + 1,
+        const id = `book_${Date.now()}`;
+        const maxOrd = books.length ? Math.max(...books.map(b=>b.order??0)) : 0;
+        await setDoc(p.tb(id), {
+          name, totalPages:total, currentPage:cur,
+          imageBase64: form.img||"",
+          order: maxOrd+1,
           updatedAt: serverTimestamp(),
         });
+        // 初回ログ設定
+        const logSnap = await import("firebase/firestore").then(({getDoc})=>getDoc(p.log(toDay())));
+        if (!logSnap.exists()) {
+          const startPages = books.reduce((s,b)=>s+(b.currentPage||0),0)+cur;
+          await setDoc(p.log(toDay()), { pages:0, startOfDayPages:startPages, updatedAt:serverTimestamp() });
+        }
       }
-      setSyncStatus("synced");
-    } catch (e) {
-      console.error(e);
-      setSyncStatus("error");
-    }
+      setSync("ok");
+    } catch(e) { console.error(e); setSync("err"); }
   };
 
-  // --- 教材削除 ---
-  const deleteBook = async (id) => {
-    if (!window.confirm("この教材を削除しますか？")) return;
-    const p = getPaths(uid);
-    setSyncStatus("saving");
+  // ---- 削除 ----
+  const confirmDelete = (id) => setConfirmDel(id);
+  const doDelete = async () => {
+    const id = confirmDel;
+    setConfirmDel(null); setModal(null); setSync("saving");
     try {
-      await deleteDoc(p.textbook(id));
-      setSyncStatus("synced");
-    } catch (e) {
-      console.error(e);
-      setSyncStatus("error");
-    }
+      await deleteDoc(P(uid).tb(id));
+      setSync("ok");
+    } catch(e) { console.error(e); setSync("err"); }
   };
 
-  // --- 並べ替え ---
-  const moveBook = async (index, dir) => {
-    const swapIdx = index + dir;
-    if (swapIdx < 0 || swapIdx >= textbooks.length) return;
-    const p = getPaths(uid);
-    setSyncStatus("saving");
+  // ---- 並べ替え ----
+  const moveBook = async (i, dir) => {
+    const j = i+dir;
+    if (j<0||j>=books.length) return;
+    const p = P(uid); setSync("saving");
     try {
       await Promise.all([
-        setDoc(p.textbook(textbooks[index].id), { order: swapIdx }, { merge: true }),
-        setDoc(p.textbook(textbooks[swapIdx].id), { order: index }, { merge: true }),
+        setDoc(p.tb(books[i].id), { order:j }, { merge:true }),
+        setDoc(p.tb(books[j].id), { order:i }, { merge:true }),
       ]);
-      setSyncStatus("synced");
-    } catch (e) {
-      setSyncStatus("error");
-    }
+      setSync("ok");
+    } catch(e) { setSync("err"); }
   };
 
-  // --- ページ増減 ---
+  // ---- ページ変更 ----
   const changePage = async (book, delta) => {
-    const newPage = Math.max(0, Math.min((book.currentPage || 0) + delta, book.totalPages || 99999));
-    const today = getTodayStr();
-    const p = getPaths(uid);
-    setSyncStatus("saving");
+    const newPage = Math.max(0, Math.min((book.currentPage||0)+delta, book.totalPages||999999));
+    const p = P(uid); setSync("saving");
     try {
-      await setDoc(p.textbook(book.id), { currentPage: newPage, updatedAt: serverTimestamp() }, { merge: true });
-      // 今日のログも更新
-      const newTotal = textbooks.reduce((s, b) => b.id === book.id ? s + newPage : s + (b.currentPage || 0), 0);
-      const todayPages = Math.max(0, newTotal - (todayLog.startOfDayPages || 0));
-      await setDoc(p.dailyLog(today), {
-        pages: todayPages,
-        startOfDayPages: todayLog.startOfDayPages || 0,
+      await setDoc(p.tb(book.id), { currentPage:newPage, updatedAt:serverTimestamp() }, { merge:true });
+      const newTotal = books.reduce((s,b) => b.id===book.id ? s+newPage : s+(b.currentPage||0), 0);
+      const todayPg  = Math.max(0, newTotal-(todayLog.startOfDayPages||0));
+      await setDoc(p.log(toDay()), {
+        pages: todayPg,
+        startOfDayPages: todayLog.startOfDayPages||0,
         updatedAt: serverTimestamp(),
-      }, { merge: true });
-      setSyncStatus("synced");
-    } catch (e) {
-      console.error(e);
-      setSyncStatus("error");
-    }
+      }, { merge:true });
+      setSync("ok");
+    } catch(e) { console.error(e); setSync("err"); }
   };
 
-  // --- 週間目標保存 ---
+  // ---- 目標保存 ----
   const saveGoal = async () => {
     const val = parseInt(goalForm);
-    if (!val || val < 1) return;
-    const p = getPaths(uid);
-    setModal(null);
-    setSyncStatus("saving");
+    if (!val||val<1) return;
+    setModal(null); setSync("saving");
     try {
-      await setDoc(p.settings, { target: val, lastResetMonday: getThisMondayStr(), updatedAt: serverTimestamp() }, { merge: true });
-      setSyncStatus("synced");
-    } catch (e) {
-      setSyncStatus("error");
-    }
+      await setDoc(P(uid).settings, { target:val, lastResetMonday:toMonday(), updatedAt:serverTimestamp() }, { merge:true });
+      setSync("ok");
+    } catch(e) { setSync("err"); }
   };
 
-  // --- モーダルを開く ---
-  const openAddBook = () => {
-    setBookForm({ name: "", totalPages: "", currentPage: "", imageBase64: "" });
-    setEditTarget(null);
-    setModal("addBook");
-  };
-  const openEditBook = (book) => {
-    setBookForm({ name: book.name, totalPages: String(book.totalPages || ""), currentPage: String(book.currentPage || ""), imageBase64: book.imageBase64 || "" });
-    setEditTarget(book);
-    setModal("editBook");
-  };
+  // ---- モーダルを開く ----
+  const openAdd = () => { setForm({ name:"",total:"",cur:"",img:"" }); setEditBook(null); setModal("add"); };
+  const openEdit = (b) => { setForm({ name:b.name, total:String(b.totalPages||""), cur:String(b.currentPage||""), img:b.imageBase64||"" }); setEditBook(b); setModal("edit"); };
   const openSettings = () => { setGoalForm(String(weeklyGoal)); setModal("settings"); };
 
-  const handleImageUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const b64 = await resizeImage(file);
-    setBookForm((prev) => ({ ...prev, imageBase64: b64 }));
+  const handleImg = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const b64 = await resizeImg(f);
+    setForm(p => ({ ...p, img:b64 }));
   };
 
   // 時刻
-  const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
-  const dateStr = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}(${DAY_NAMES[now.getDay()]})`;
-  const syncColor = syncStatus === "synced" ? "#48bb78" : syncStatus === "saving" ? "#f6ad55" : "#fc8181";
+  const hh = pad(now.getHours()), mm = pad(now.getMinutes()), ss = pad(now.getSeconds());
+  const dateStr = `${now.getFullYear()}/${pad(now.getMonth()+1)}/${pad(now.getDate())}(${DAY_JA[now.getDay()]})`;
+  const syncColor = sync==="ok" ? "#48bb78" : sync==="saving" ? "#f6ad55" : "#fc8181";
+
+  const font = "'Hiragino Kaku Gothic ProN','Noto Sans JP','Yu Gothic',sans-serif";
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: "linear-gradient(160deg, #0d1117 0%, #161b27 60%, #1a1f35 100%)",
-      fontFamily: "'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic', sans-serif",
-      color: "#e2e8f0",
-      paddingBottom: "60px",
-    }}>
-      {/* ---- トップバー ---- */}
-      <div style={{
-        position: "sticky", top: 0, zIndex: 100,
-        background: "rgba(13,17,23,0.92)",
-        backdropFilter: "blur(12px)",
-        borderBottom: "1px solid rgba(255,255,255,0.07)",
-        padding: "10px 16px",
-        display: "flex", alignItems: "center", gap: "10px",
-      }}>
-        <button
-          onClick={showNextMessage}
-          style={{ background: "none", border: "none", cursor: "pointer", fontSize: "28px", lineHeight: 1, padding: "4px", WebkitTapHighlightColor: "transparent" }}
-          onPointerDown={(e) => (e.currentTarget.style.transform = "scale(0.88)")}
-          onPointerUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
-          onPointerLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
-        >
-          📚
-        </button>
+    <>
+      <style>{GLOBAL_CSS}</style>
 
-        <div style={{ flex: 1, textAlign: "center" }}>
-          <div style={{ fontSize: "20px", fontWeight: "800", letterSpacing: "0.04em", color: "#63b3ed", lineHeight: 1.1 }}>{timeStr}</div>
-          <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", marginTop: "2px" }}>{dateStr}</div>
-        </div>
+      <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#0d1117 0%,#161b27 60%,#1a1f35 100%)", fontFamily:font, color:"#e2e8f0", paddingBottom:"60px" }}>
 
-        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-          <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: syncColor, boxShadow: `0 0 6px ${syncColor}` }} title={syncStatus} />
-          <TapBtn onClick={openSettings} small>⚙️</TapBtn>
-          <TapBtn onClick={onLogout} small>🚪</TapBtn>
-        </div>
-      </div>
-
-      {/* ---- 合格くんバブル ---- */}
-      {showMascot && (
+        {/* ===== トップバー ===== */}
         <div style={{
-          position: "fixed", top: "68px", left: "50%", transform: "translateX(-50%)",
-          zIndex: 200, background: "linear-gradient(135deg,#2d3748,#4a5568)",
-          border: "1px solid rgba(99,179,237,0.4)", borderRadius: "16px",
-          padding: "12px 20px", maxWidth: "88vw", textAlign: "center",
-          fontSize: "14px", color: "#bee3f8", boxShadow: "0 8px 32px rgba(0,0,0,0.45)",
-          animation: "fadeInDown 0.3s ease",
+          position:"sticky", top:0, zIndex:100,
+          background:"rgba(13,17,23,0.93)",
+          backdropFilter:"blur(12px)",
+          borderBottom:"1px solid rgba(255,255,255,0.07)",
+          padding:"10px 14px",
+          display:"flex", alignItems:"center", gap:"8px",
         }}>
-          {mascotMsg}
-        </div>
-      )}
+          <button
+            onClick={nextMsg}
+            style={{ background:"none", border:"none", fontSize:"26px", cursor:"pointer", padding:"4px", lineHeight:1 }}
+          >📚</button>
 
-      {/* ---- サマリーカード ---- */}
-      <div style={{ padding: "16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", maxWidth: "600px", margin: "0 auto" }}>
-        <SummaryCard icon="📅" label="残ノルマ" value={remainingNorma} unit="p" color="#fc8181" />
-        <SummaryCard icon="✏️" label="今日の進捗" value={todayProgress} unit="p" color="#68d391" />
-        <SummaryCard icon="🎯" label="週間目標" value={weeklyGoal} unit="p" color="#63b3ed" onClick={openSettings} />
-        <SummaryCard icon="📖" label="教材数" value={textbooks.length} unit="冊" color="#f6ad55" />
-      </div>
+          <div style={{ flex:1, textAlign:"center" }}>
+            <div style={{ fontSize:"20px", fontWeight:"800", color:"#63b3ed", letterSpacing:"0.04em", lineHeight:1.1 }}>
+              {hh}:{mm}:{ss}
+            </div>
+            <div style={{ fontSize:"11px", color:"rgba(255,255,255,0.4)", marginTop:"2px" }}>{dateStr}</div>
+          </div>
 
-      {/* ---- 教材リスト ---- */}
-      <div style={{ padding: "0 16px 16px", maxWidth: "600px", margin: "0 auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "rgba(255,255,255,0.75)" }}>
-            📚 教材一覧
-          </h2>
-          <TapBtn onClick={openAddBook} accent>＋ 追加</TapBtn>
+          <div style={{ display:"flex", gap:"6px", alignItems:"center" }}>
+            <div style={{ width:"8px", height:"8px", borderRadius:"50%", background:syncColor, boxShadow:`0 0 6px ${syncColor}` }} />
+            <Btn onClick={openSettings} sm>⚙️</Btn>
+            <Btn onClick={() => setConfirmLogout(true)} sm>🚪</Btn>
+          </div>
         </div>
 
-        {textbooks.length === 0 ? (
+        {/* ===== 合格くんバブル ===== */}
+        {showMascot && (
           <div style={{
-            textAlign: "center", padding: "40px 20px",
-            color: "rgba(255,255,255,0.25)",
-            border: "2px dashed rgba(255,255,255,0.08)", borderRadius: "16px",
+            position:"fixed", top:"66px", left:"50%", transform:"translateX(-50%)",
+            zIndex:200, background:"#2d3748",
+            border:"1px solid rgba(99,179,237,0.4)", borderRadius:"14px",
+            padding:"11px 18px", maxWidth:"88vw",
+            fontSize:"14px", color:"#bee3f8",
+            boxShadow:"0 8px 28px rgba(0,0,0,0.45)",
+            animation:"fadeIn .3s ease",
           }}>
-            <div style={{ fontSize: "36px", marginBottom: "10px" }}>📭</div>
-            <div>「＋ 追加」から教材を登録してください</div>
+            {mascotMsg}
           </div>
-        ) : (
-          textbooks.map((book, i) => (
-            <BookCard
-              key={book.id}
-              book={book}
-              index={i}
-              total={textbooks.length}
-              onEdit={() => openEditBook(book)}
-              onDelete={() => deleteBook(book.id)}
-              onMoveUp={() => moveBook(i, -1)}
-              onMoveDown={() => moveBook(i, 1)}
-              onChangePage={(delta) => changePage(book, delta)}
-            />
-          ))
         )}
+
+        {/* ===== サマリー ===== */}
+        <div style={{ padding:"14px", display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px", maxWidth:"600px", margin:"0 auto" }}>
+          <Card icon="📅" label="残ノルマ"   value={remaining}     unit="p" color="#fc8181" />
+          <Card icon="✏️" label="今日の進捗" value={todayProgress}  unit="p" color="#68d391" />
+          <Card icon="🎯" label="週間目標"   value={weeklyGoal}     unit="p" color="#63b3ed" onClick={openSettings} />
+          <Card icon="📖" label="教材数"     value={books.length}   unit="冊" color="#f6ad55" />
+        </div>
+
+        {/* ===== 教材リスト ===== */}
+        <div style={{ padding:"0 14px 16px", maxWidth:"600px", margin:"0 auto" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"12px" }}>
+            <span style={{ fontSize:"15px", fontWeight:"700", color:"rgba(255,255,255,0.75)" }}>📚 教材一覧</span>
+            <Btn onClick={openAdd} accent>＋ 追加</Btn>
+          </div>
+
+          {books.length === 0 ? (
+            <div style={{ textAlign:"center", padding:"40px 20px", color:"rgba(255,255,255,0.25)", border:"2px dashed rgba(255,255,255,0.08)", borderRadius:"16px" }}>
+              <div style={{ fontSize:"36px", marginBottom:"10px" }}>📭</div>
+              <div>「＋ 追加」から教材を登録してください</div>
+            </div>
+          ) : books.map((b,i) => (
+            <BookCard
+              key={b.id} book={b} index={i} total={books.length}
+              onEdit={() => openEdit(b)}
+              onDelete={() => confirmDelete(b.id)}
+              onUp={() => moveBook(i,-1)}
+              onDown={() => moveBook(i,1)}
+              onPage={delta => changePage(b,delta)}
+            />
+          ))}
+        </div>
+
+        {/* ===== モーダル（追加・編集） ===== */}
+        {(modal==="add"||modal==="edit") && (
+          <Sheet title={modal==="add" ? "📗 教材を追加" : "✏️ 教材を編集"} onClose={() => setModal(null)}>
+            <FInput label="教材名" value={form.name} onChange={v=>setForm(p=>({...p,name:v}))} placeholder="例: 財務会計論テキスト" />
+            <FInput label="総ページ数" value={form.total} onChange={v=>setForm(p=>({...p,total:v}))} type="number" placeholder="例: 500" />
+            <FInput label="現在のページ" value={form.cur} onChange={v=>setForm(p=>({...p,cur:v}))} type="number" placeholder="例: 120" />
+            <div style={{ marginBottom:"18px" }}>
+              <label style={LS}>表紙画像（任意）</label>
+              <input type="file" accept="image/*" onChange={handleImg}
+                style={{ color:"rgba(255,255,255,0.6)", fontSize:"14px", display:"block" }} />
+              {form.img && <img src={form.img} alt="" style={{ width:"54px",height:"72px",objectFit:"cover",borderRadius:"6px",marginTop:"8px" }} />}
+            </div>
+            <Btn onClick={saveBook} accent full>{modal==="add" ? "追加する" : "保存する"}</Btn>
+          </Sheet>
+        )}
+
+        {/* ===== 設定モーダル ===== */}
+        {modal==="settings" && (
+          <Sheet title="⚙️ 設定" onClose={() => setModal(null)}>
+            <FInput label="週間目標ページ数" value={goalForm} onChange={setGoalForm} type="number" placeholder="例: 100" />
+            <Btn onClick={saveGoal} accent full>保存する</Btn>
+            <div style={{ marginTop:"16px", padding:"12px", background:"rgba(255,255,255,0.04)", borderRadius:"10px", fontSize:"12px", color:"rgba(255,255,255,0.35)", lineHeight:1.9 }}>
+              <div>🔑 UID: {uid.slice(0,12)}...</div>
+              <div>📡 固定ID: {FIXED_ID}</div>
+              <div>📱 同期: {sync==="ok"?"✅ 正常":sync==="saving"?"⏳ 保存中":"❌ エラー"}</div>
+            </div>
+          </Sheet>
+        )}
+
+        {/* ===== 削除確認 ===== */}
+        {confirmDel && (
+          <ConfirmDialog
+            message="この教材を削除しますか？"
+            onOk={doDelete}
+            onCancel={() => setConfirmDel(null)}
+          />
+        )}
+
+        {/* ===== ログアウト確認 ===== */}
+        {confirmLogout && (
+          <LogoutDialog
+            onOk={() => { setConfirmLogout(false); onLogout(); }}
+            onCancel={() => setConfirmLogout(false)}
+          />
+        )}
+
       </div>
-
-      {/* ---- モーダル ---- */}
-      {(modal === "addBook" || modal === "editBook") && (
-        <BottomModal title={modal === "addBook" ? "📗 教材を追加" : "✏️ 教材を編集"} onClose={() => setModal(null)}>
-          <FormInput label="教材名" value={bookForm.name} onChange={(v) => setBookForm((p) => ({ ...p, name: v }))} placeholder="例: 財務会計論テキスト" />
-          <FormInput label="総ページ数" value={bookForm.totalPages} onChange={(v) => setBookForm((p) => ({ ...p, totalPages: v }))} type="number" placeholder="例: 500" />
-          <FormInput label="現在のページ" value={bookForm.currentPage} onChange={(v) => setBookForm((p) => ({ ...p, currentPage: v }))} type="number" placeholder="例: 120" />
-          <div style={{ marginBottom: "18px" }}>
-            <label style={labelStyle}>表紙画像（任意）</label>
-            <input type="file" accept="image/*" onChange={handleImageUpload} style={{ color: "rgba(255,255,255,0.6)", fontSize: "14px", display: "block" }} />
-            {bookForm.imageBase64 && (
-              <img src={bookForm.imageBase64} alt="preview" style={{ width: "56px", height: "74px", objectFit: "cover", borderRadius: "6px", marginTop: "8px" }} />
-            )}
-          </div>
-          <TapBtn onClick={saveBook} accent full>{modal === "addBook" ? "追加する" : "保存する"}</TapBtn>
-        </BottomModal>
-      )}
-
-      {modal === "settings" && (
-        <BottomModal title="⚙️ 設定" onClose={() => setModal(null)}>
-          <FormInput label="週間目標ページ数" value={goalForm} onChange={setGoalForm} type="number" placeholder="例: 100" />
-          <TapBtn onClick={saveGoal} accent full>保存する</TapBtn>
-          <div style={{ marginTop: "16px", padding: "12px", background: "rgba(255,255,255,0.04)", borderRadius: "10px", fontSize: "12px", color: "rgba(255,255,255,0.35)", lineHeight: 1.8 }}>
-            <div>🔑 UID: {uid.slice(0, 12)}...</div>
-            <div>📡 固定ID: {FIXED_ID}</div>
-            <div>📱 同期: {syncStatus === "synced" ? "✅ 正常" : syncStatus === "saving" ? "⏳ 保存中" : "❌ エラー"}</div>
-          </div>
-        </BottomModal>
-      )}
 
       <style>{`
-        @keyframes fadeInDown {
-          from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
-          to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        @keyframes fadeIn {
+          from { opacity:0; transform:translateX(-50%) translateY(-10px); }
+          to   { opacity:1; transform:translateX(-50%) translateY(0); }
         }
       `}</style>
-    </div>
+    </>
   );
 }
 
 // ============================================================
 // 教材カード
 // ============================================================
-function BookCard({ book, index, total, onEdit, onDelete, onMoveUp, onMoveDown, onChangePage }) {
-  const progress = book.totalPages > 0 ? Math.min(100, Math.round(((book.currentPage || 0) / book.totalPages) * 100)) : 0;
-  const barColor = progress >= 100 ? "#68d391" : progress >= 50 ? "#63b3ed" : "#f6ad55";
+function BookCard({ book, index, total, onEdit, onDelete, onUp, onDown, onPage }) {
+  const pct = book.totalPages > 0 ? Math.min(100, Math.round((book.currentPage||0)/book.totalPages*100)) : 0;
+  const bar = pct>=100 ? "#68d391" : pct>=50 ? "#63b3ed" : "#f6ad55";
 
   return (
-    <div style={{
-      background: "rgba(255,255,255,0.04)",
-      border: "1px solid rgba(255,255,255,0.07)",
-      borderRadius: "16px",
-      padding: "14px",
-      marginBottom: "10px",
-    }}>
-      <div style={{ display: "flex", gap: "12px" }}>
-        {/* 表紙 */}
-        <div style={{
-          width: "46px", height: "62px", borderRadius: "6px", flexShrink: 0,
-          background: book.imageBase64 ? "transparent" : "linear-gradient(135deg,#2d3748,#4a5568)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: "22px", overflow: "hidden",
-        }}>
-          {book.imageBase64 ? <img src={book.imageBase64} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "📗"}
+    <div style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"16px", padding:"14px", marginBottom:"10px" }}>
+      <div style={{ display:"flex", gap:"12px" }}>
+        <div style={{ width:"44px", height:"60px", borderRadius:"6px", flexShrink:0, background:book.imageBase64?"transparent":"linear-gradient(135deg,#2d3748,#4a5568)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"20px", overflow:"hidden" }}>
+          {book.imageBase64 ? <img src={book.imageBase64} alt="" style={{ width:"100%",height:"100%",objectFit:"cover" }} /> : "📗"}
         </div>
-
-        {/* 情報 */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: "700", fontSize: "15px", marginBottom: "3px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {book.name}
-          </div>
-          <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.45)", marginBottom: "8px" }}>
-            {book.currentPage || 0} / {book.totalPages || "?"} p — {progress}%
-          </div>
-          <div style={{ height: "5px", background: "rgba(255,255,255,0.08)", borderRadius: "3px", overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${progress}%`, background: barColor, borderRadius: "3px", transition: "width 0.4s ease" }} />
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontWeight:"700", fontSize:"15px", marginBottom:"3px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{book.name}</div>
+          <div style={{ fontSize:"12px", color:"rgba(255,255,255,0.45)", marginBottom:"7px" }}>{book.currentPage||0} / {book.totalPages||"?"} p — {pct}%</div>
+          <div style={{ height:"5px", background:"rgba(255,255,255,0.08)", borderRadius:"3px", overflow:"hidden" }}>
+            <div style={{ height:"100%", width:`${pct}%`, background:bar, borderRadius:"3px", transition:"width .4s" }} />
           </div>
         </div>
       </div>
 
-      {/* 操作ボタン */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "12px", gap: "6px" }}>
-        <div style={{ display: "flex", gap: "5px" }}>
-          {[1, 5, 10].map((n) => (
-            <TapBtn key={n} onClick={() => onChangePage(n)} color="#68d391">+{n}</TapBtn>
-          ))}
-          <TapBtn onClick={() => onChangePage(-1)} color="#fc8181">-1</TapBtn>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:"12px", gap:"6px" }}>
+        <div style={{ display:"flex", gap:"5px" }}>
+          {[1,5,10].map(n => <Btn key={n} onClick={() => onPage(n)}  color="#68d391">+{n}</Btn>)}
+          <Btn onClick={() => onPage(-1)} color="#fc8181">-1</Btn>
         </div>
-        <div style={{ display: "flex", gap: "4px" }}>
-          <TapBtn onClick={onMoveUp} disabled={index === 0} color="#a0aec0">▲</TapBtn>
-          <TapBtn onClick={onMoveDown} disabled={index === total - 1} color="#a0aec0">▼</TapBtn>
-          <TapBtn onClick={onEdit} color="#63b3ed">✏️</TapBtn>
-          <TapBtn onClick={onDelete} color="#fc8181">🗑</TapBtn>
+        <div style={{ display:"flex", gap:"4px" }}>
+          <Btn onClick={onUp}     disabled={index===0}       color="#a0aec0">▲</Btn>
+          <Btn onClick={onDown}   disabled={index===total-1} color="#a0aec0">▼</Btn>
+          <Btn onClick={onEdit}   color="#63b3ed">✏️</Btn>
+          <Btn onClick={onDelete} color="#fc8181">🗑</Btn>
         </div>
       </div>
     </div>
@@ -837,49 +834,31 @@ function BookCard({ book, index, total, onEdit, onDelete, onMoveUp, onMoveDown, 
 // ============================================================
 // サマリーカード
 // ============================================================
-function SummaryCard({ icon, label, value, unit, color, onClick }) {
+function Card({ icon, label, value, unit, color, onClick }) {
   return (
-    <div onClick={onClick} style={{
-      background: "rgba(255,255,255,0.04)",
-      border: `1px solid ${color}28`,
-      borderRadius: "14px",
-      padding: "14px 12px",
-      cursor: onClick ? "pointer" : "default",
-    }}>
-      <div style={{ fontSize: "20px", marginBottom: "4px" }}>{icon}</div>
-      <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", marginBottom: "4px" }}>{label}</div>
-      <div style={{ fontSize: "28px", fontWeight: "800", color, lineHeight: 1 }}>
-        {value}<span style={{ fontSize: "12px", fontWeight: "400", marginLeft: "3px" }}>{unit}</span>
+    <div onClick={onClick} style={{ background:"rgba(255,255,255,0.04)", border:`1px solid ${color}28`, borderRadius:"14px", padding:"13px 12px", cursor:onClick?"pointer":"default" }}>
+      <div style={{ fontSize:"18px", marginBottom:"4px" }}>{icon}</div>
+      <div style={{ fontSize:"11px", color:"rgba(255,255,255,0.45)", marginBottom:"3px" }}>{label}</div>
+      <div style={{ fontSize:"26px", fontWeight:"800", color, lineHeight:1 }}>
+        {value}<span style={{ fontSize:"12px", fontWeight:"400", marginLeft:"3px" }}>{unit}</span>
       </div>
     </div>
   );
 }
 
 // ============================================================
-// ボトムシートモーダル
+// ボトムシート
 // ============================================================
-function BottomModal({ title, children, onClose }) {
+function Sheet({ title, children, onClose }) {
   return (
     <div
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-      style={{
-        position: "fixed", inset: 0, zIndex: 300,
-        background: "rgba(0,0,0,0.72)",
-        display: "flex", alignItems: "flex-end", justifyContent: "center",
-        backdropFilter: "blur(5px)",
-      }}
+      onClick={e => e.target===e.currentTarget && onClose()}
+      style={{ position:"fixed", inset:0, zIndex:300, background:"rgba(0,0,0,0.72)", display:"flex", alignItems:"flex-end", justifyContent:"center", backdropFilter:"blur(5px)" }}
     >
-      <div style={{
-        background: "linear-gradient(160deg,#1a202c,#2d3748)",
-        border: "1px solid rgba(255,255,255,0.1)",
-        borderRadius: "20px 20px 0 0",
-        padding: "24px 20px 48px",
-        width: "100%", maxWidth: "500px",
-        maxHeight: "88vh", overflowY: "auto",
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "22px" }}>
-          <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "700" }}>{title}</h3>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.45)", fontSize: "22px", cursor: "pointer", padding: "4px", lineHeight: 1 }}>✕</button>
+      <div style={{ background:"linear-gradient(160deg,#1a202c,#2d3748)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"20px 20px 0 0", padding:"22px 18px 50px", width:"100%", maxWidth:"500px", maxHeight:"88vh", overflowY:"auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"20px" }}>
+          <span style={{ fontSize:"16px", fontWeight:"700" }}>{title}</span>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", fontSize:"22px", cursor:"pointer", padding:"4px", lineHeight:1 }}>✕</button>
         </div>
         {children}
       </div>
@@ -888,29 +867,26 @@ function BottomModal({ title, children, onClose }) {
 }
 
 // ============================================================
-// フォーム入力
+// フォーム入力（Safari対策: labelとinputを同じdiv内で直置き）
 // ============================================================
-function FormInput({ label, value, onChange, type = "text", placeholder }) {
+function FInput({ label, value, onChange, type="text", placeholder }) {
   return (
-    <div style={{ marginBottom: "16px" }}>
-      <label style={labelStyle}>{label}</label>
+    <div style={{ marginBottom:"16px" }}>
+      <label style={LS}>{label}</label>
       <input
         type={type}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
-        inputMode={type === "number" ? "numeric" : undefined}
+        inputMode={type==="number" ? "numeric" : undefined}
         style={{
-          width: "100%",
-          padding: "12px 14px",
-          fontSize: "16px", // iOSズーム防止
-          border: "1px solid rgba(255,255,255,0.13)",
-          borderRadius: "10px",
-          background: "rgba(255,255,255,0.07)",
-          color: "#fff",
-          outline: "none",
-          boxSizing: "border-box",
-          WebkitAppearance: "none",
+          display:"block", width:"100%",
+          padding:"12px 14px",
+          fontSize:"16px",
+          border:"1px solid rgba(255,255,255,0.13)",
+          borderRadius:"10px",
+          background:"rgba(255,255,255,0.07)",
+          color:"#fff", outline:"none",
         }}
       />
     </div>
@@ -918,49 +894,34 @@ function FormInput({ label, value, onChange, type = "text", placeholder }) {
 }
 
 // ============================================================
-// 汎用タップボタン
+// 汎用ボタン
 // ============================================================
-function TapBtn({ children, onClick, color = "#63b3ed", disabled = false, accent = false, small = false, full = false }) {
-  const bg = accent
-    ? "linear-gradient(135deg,#63b3ed,#4299e1)"
-    : disabled ? "rgba(255,255,255,0.04)" : `${color}18`;
-  const borderColor = disabled ? "rgba(255,255,255,0.05)" : accent ? "transparent" : `${color}45`;
-  const textColor = disabled ? "rgba(255,255,255,0.2)" : accent ? "#fff" : color;
+function Btn({ children, onClick, color="#63b3ed", disabled=false, accent=false, sm=false, full=false }) {
+  const bg = accent ? "linear-gradient(135deg,#63b3ed,#4299e1)" : disabled ? "rgba(255,255,255,0.04)" : `${color}18`;
+  const bc = disabled ? "rgba(255,255,255,0.05)" : accent ? "transparent" : `${color}45`;
+  const cl = disabled ? "rgba(255,255,255,0.2)" : accent ? "#fff" : color;
 
   return (
     <button
       onClick={disabled ? undefined : onClick}
       style={{
-        background: bg,
-        border: `1px solid ${borderColor}`,
-        borderRadius: "8px",
-        padding: small ? "6px 10px" : "7px 11px",
-        color: textColor,
-        fontSize: small ? "14px" : "13px",
-        fontWeight: "700",
+        background:bg, border:`1px solid ${bc}`, borderRadius:"8px",
+        padding: sm ? "6px 9px" : "7px 11px",
+        color:cl, fontSize:"13px", fontWeight:"700",
         cursor: disabled ? "not-allowed" : "pointer",
-        transition: "transform 0.1s",
-        WebkitTapHighlightColor: "transparent",
-        minWidth: full ? "auto" : "36px",
+        minWidth: full ? "auto" : "34px",
         width: full ? "100%" : undefined,
-        boxShadow: accent ? "0 3px 12px rgba(66,153,225,0.3)" : "none",
+        boxShadow: accent ? "0 3px 10px rgba(66,153,225,0.3)" : "none",
+        transition:"transform .1s",
       }}
-      onPointerDown={(e) => { if (!disabled) e.currentTarget.style.transform = "scale(0.92)"; }}
-      onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
-      onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+      onPointerDown={e => { if(!disabled) e.currentTarget.style.transform="scale(0.91)"; }}
+      onPointerUp={e => { e.currentTarget.style.transform="scale(1)"; }}
+      onPointerLeave={e => { e.currentTarget.style.transform="scale(1)"; }}
     >
       {children}
     </button>
   );
 }
 
-// ============================================================
 // スタイル定数
-// ============================================================
-const labelStyle = {
-  display: "block",
-  color: "rgba(255,255,255,0.6)",
-  fontSize: "13px",
-  fontWeight: "600",
-  marginBottom: "6px",
-};
+const LS = { display:"block", color:"rgba(255,255,255,0.6)", fontSize:"13px", fontWeight:"600", marginBottom:"6px" };
