@@ -1,6 +1,7 @@
 // ============================================================
-// CPA Study Tracker - App.jsx
-// Safari入力完全修正版（backdropFilter完全除去）
+// CPA Study Tracker - App.jsx 完全版
+// ・全体進捗バー追加
+// ・Safari キーボード完全修正（overflowY除去）
 // FIXED_ID: CPA_ROOT_V7000 (絶対変更禁止)
 // ============================================================
 
@@ -89,10 +90,19 @@ const MSGS = [
   "今日の頑張りを明日の自分が感謝する！",
   "財務諸表も最初は誰でも苦手。大丈夫！",
 ];
-const shuffle = (a) => { const b=[...a]; for(let i=b.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[b[i],b[j]]=[b[j],b[i]];} return b; };
+const shuffle = (a) => {
+  const b = [...a];
+  for (let i = b.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [b[i], b[j]] = [b[j], b[i]];
+  }
+  return b;
+};
 
 // ============================================================
-// グローバルCSS（index.htmlの<head>に追加することを推奨）
+// グローバルCSS
+// ★ input/textareaにuser-select:autoを明示（継承対策）
+// ★ *にuser-select:noneは絶対に書かない
 // ============================================================
 const GCSS = `
   *, *::before, *::after { box-sizing: border-box; }
@@ -103,6 +113,7 @@ const GCSS = `
     -webkit-user-select: auto !important;
     user-select: auto !important;
     touch-action: manipulation !important;
+    pointer-events: auto !important;
   }
   button { -webkit-tap-highlight-color: transparent; }
 `;
@@ -151,7 +162,7 @@ function ConfirmDlg({ msg, okLabel, okColor, onOk, onCancel }) {
 
 // ============================================================
 // ログイン画面
-// ★ Safari対策: backdropFilter一切なし・filterなし・overflowなし
+// ★ backdropFilter・filter・overflow 一切なし
 // ============================================================
 function LoginScreen({ onLogin, onSignup }) {
   const [email, setEmail] = useState("");
@@ -178,27 +189,37 @@ function LoginScreen({ onLogin, onSignup }) {
     } finally { setBusy(false); }
   };
 
+  const inputStyle = {
+    display:"block", width:"100%", padding:"14px",
+    fontSize:"16px", lineHeight:"1.4",
+    color:"#fff", background:"rgba(255,255,255,0.1)",
+    border:"1px solid rgba(255,255,255,0.2)",
+    borderRadius:"10px", outline:"none",
+    WebkitAppearance:"none",
+    // ★ Safariキーボード対策: これらを明示
+    WebkitUserSelect:"auto",
+    userSelect:"auto",
+    touchAction:"manipulation",
+  };
+
   return (
     <>
       <style>{GCSS}</style>
       <div style={{
-        minHeight: "100vh",
-        // ★ backdropFilter禁止・filter禁止
-        background: "#0f1923",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "24px 16px",
-        fontFamily: "'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif",
+        minHeight:"100vh",
+        background:"#0f1923",
+        // ★ backdropFilter絶対禁止
+        display:"flex", alignItems:"center", justifyContent:"center",
+        padding:"24px 16px",
+        fontFamily:"'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif",
       }}>
         <div style={{
-          width: "100%",
-          maxWidth: "360px",
-          // ★ backdropFilter禁止・filter禁止・overflow禁止
-          background: "rgba(255,255,255,0.07)",
-          border: "1px solid rgba(255,255,255,0.13)",
-          borderRadius: "20px",
-          padding: "36px 24px 40px",
+          width:"100%", maxWidth:"360px",
+          background:"rgba(255,255,255,0.07)",
+          border:"1px solid rgba(255,255,255,0.13)",
+          borderRadius:"20px",
+          padding:"36px 24px 40px",
+          // ★ overflow:hidden禁止・backdropFilter禁止
         }}>
           <div style={{ textAlign:"center", marginBottom:"28px" }}>
             <div style={{ fontSize:"52px", lineHeight:1, marginBottom:"10px" }}>📚</div>
@@ -217,7 +238,6 @@ function LoginScreen({ onLogin, onSignup }) {
             ))}
           </div>
 
-          {/* ★ メール input: 親にposition:relative等一切なし */}
           <div style={{ marginBottom:"14px" }}>
             <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"14px", marginBottom:"7px" }}>
               メールアドレス
@@ -231,18 +251,10 @@ function LoginScreen({ onLogin, onSignup }) {
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="example@email.com"
-              style={{
-                display:"block", width:"100%", padding:"14px",
-                fontSize:"16px", lineHeight:"1.4",
-                color:"#fff", background:"rgba(255,255,255,0.1)",
-                border:"1px solid rgba(255,255,255,0.2)",
-                borderRadius:"10px", outline:"none",
-                WebkitAppearance:"none",
-              }}
+              style={inputStyle}
             />
           </div>
 
-          {/* ★ パスワード input */}
           <div style={{ marginBottom:"22px" }}>
             <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"14px", marginBottom:"7px" }}>
               パスワード
@@ -254,14 +266,7 @@ function LoginScreen({ onLogin, onSignup }) {
               onChange={e => setPass(e.target.value)}
               onKeyDown={e => e.key === "Enter" && submit()}
               placeholder="6文字以上"
-              style={{
-                display:"block", width:"100%", padding:"14px",
-                fontSize:"16px", lineHeight:"1.4",
-                color:"#fff", background:"rgba(255,255,255,0.1)",
-                border:"1px solid rgba(255,255,255,0.2)",
-                borderRadius:"10px", outline:"none",
-                WebkitAppearance:"none",
-              }}
+              style={inputStyle}
             />
           </div>
 
@@ -388,6 +393,7 @@ function Dashboard({ user, onLogout }) {
     if (lastMonday !== mon) setDoc(P(uid).settings, { lastResetMonday:mon, updatedAt:serverTimestamp() }, { merge:true }).catch(console.error);
   }, [lastMonday]);
 
+  // 計算
   const totalCur      = books.reduce((s,b) => s+(b.currentPage||0), 0);
   const totalPages    = books.reduce((s,b) => s+(b.totalPages||0), 0);
   const overallPct    = totalPages > 0 ? Math.min(100, Math.round(totalCur / totalPages * 100)) : 0;
@@ -447,10 +453,10 @@ function Dashboard({ user, onLogout }) {
     catch(e) { setSync("err"); }
   };
 
-  const openAdd  = () => { setForm({ name:"",total:"",cur:"",img:"" }); setEditBook(null); setModal("add"); };
-  const openEdit = (b) => { setForm({ name:b.name, total:String(b.totalPages||""), cur:String(b.currentPage||""), img:b.imageBase64||"" }); setEditBook(b); setModal("edit"); };
+  const openAdd      = () => { setForm({ name:"",total:"",cur:"",img:"" }); setEditBook(null); setModal("add"); };
+  const openEdit     = (b) => { setForm({ name:b.name, total:String(b.totalPages||""), cur:String(b.currentPage||""), img:b.imageBase64||"" }); setEditBook(b); setModal("edit"); };
   const openSettings = () => { setGoalForm(String(weeklyGoal)); setModal("settings"); };
-  const handleImg = async (e) => { const f=e.target.files?.[0]; if(f){const b64=await resizeImg(f); setForm(p=>({...p,img:b64}));} };
+  const handleImg    = async (e) => { const f=e.target.files?.[0]; if(f){const b64=await resizeImg(f); setForm(p=>({...p,img:b64}));} };
 
   const hh=pad(now.getHours()), mm=pad(now.getMinutes()), ss=pad(now.getSeconds());
   const dateStr=`${now.getFullYear()}/${pad(now.getMonth()+1)}/${pad(now.getDate())}(${DAY_JA[now.getDay()]})`;
@@ -483,7 +489,7 @@ function Dashboard({ user, onLogout }) {
           </div>
         )}
 
-        {/* サマリー */}
+        {/* サマリーカード */}
         <div style={{ padding:"14px", display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px", maxWidth:"600px", margin:"0 auto" }}>
           <SCard icon="📅" label="残ノルマ"   value={remaining}    unit="p"  color="#fc8181" />
           <SCard icon="✏️" label="今日の進捗" value={todayProgress} unit="p"  color="#68d391" />
@@ -513,15 +519,12 @@ function Dashboard({ user, onLogout }) {
                   </span>
                 </div>
               </div>
-              {/* プログレスバー */}
               <div style={{ height:"8px", background:"rgba(255,255,255,0.08)", borderRadius:"4px", overflow:"hidden" }}>
                 <div style={{
                   height:"100%",
                   width:`${overallPct}%`,
                   borderRadius:"4px",
-                  background: overallPct >= 100
-                    ? "#68d391"
-                    : "linear-gradient(90deg, #7c3aed, #a78bfa)",
+                  background: overallPct >= 100 ? "#68d391" : "linear-gradient(90deg,#7c3aed,#a78bfa)",
                   transition:"width .6s ease",
                 }} />
               </div>
@@ -530,7 +533,7 @@ function Dashboard({ user, onLogout }) {
         )}
 
         {/* 教材リスト */}
-        <div style={{ padding:"0 14px 16px", maxWidth:"600px", margin:"0 auto" }}>
+        <div style={{ padding:"14px", maxWidth:"600px", margin:"0 auto" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"12px" }}>
             <span style={{ fontSize:"15px", fontWeight:"700", color:"rgba(255,255,255,0.75)" }}>📚 教材一覧</span>
             <Btn onClick={openAdd} accent>＋ 追加</Btn>
@@ -559,7 +562,8 @@ function Dashboard({ user, onLogout }) {
             <FInput label="現在のページ" value={form.cur} onChange={v=>setForm(p=>({...p,cur:v}))} type="number" placeholder="例: 120" />
             <div style={{ marginBottom:"18px" }}>
               <label style={LS}>表紙画像（任意）</label>
-              <input type="file" accept="image/*" onChange={handleImg} style={{ color:"rgba(255,255,255,0.6)", fontSize:"14px", display:"block" }} />
+              <input type="file" accept="image/*" onChange={handleImg}
+                style={{ color:"rgba(255,255,255,0.6)", fontSize:"14px", display:"block" }} />
               {form.img && <img src={form.img} alt="" style={{ width:"54px",height:"72px",objectFit:"cover",borderRadius:"6px",marginTop:"8px" }} />}
             </div>
             <Btn onClick={saveBook} accent full>{modal==="add" ? "追加する" : "保存する"}</Btn>
@@ -580,10 +584,12 @@ function Dashboard({ user, onLogout }) {
         )}
 
         {confirmDel && (
-          <ConfirmDlg msg="この教材を削除しますか？" okLabel="削除する" okColor="#e53e3e" onOk={doDelete} onCancel={() => setConfirmDel(null)} />
+          <ConfirmDlg msg="この教材を削除しますか？" okLabel="削除する" okColor="#e53e3e"
+            onOk={doDelete} onCancel={() => setConfirmDel(null)} />
         )}
         {confirmOut && (
-          <ConfirmDlg msg="ログアウトしますか？" okLabel="ログアウト" okColor="#4299e1" onOk={() => { setConfirmOut(false); onLogout(); }} onCancel={() => setConfirmOut(false)} />
+          <ConfirmDlg msg="ログアウトしますか？" okLabel="ログアウト" okColor="#4299e1"
+            onOk={() => { setConfirmOut(false); onLogout(); }} onCancel={() => setConfirmOut(false)} />
         )}
       </div>
     </>
@@ -643,7 +649,10 @@ function SCard({ icon, label, value, unit, color, onClick }) {
 
 // ============================================================
 // ボトムシート
-// ★★★ Safari対策の核心: backdropFilterを絶対に使わない ★★★
+// ★★★ Safari対策:
+//   - backdropFilter 絶対禁止
+//   - overflowY:"auto" 禁止（これがキーボードを消す原因）
+//   - 代わりにmaxHeightのみ指定
 // ============================================================
 function Sheet({ title, children, onClose }) {
   return (
@@ -652,18 +661,21 @@ function Sheet({ title, children, onClose }) {
       style={{
         position:"fixed", inset:0, zIndex:300,
         background:"rgba(0,0,0,0.75)",
-        // ★ backdropFilter: 絶対に書かない（Safariでinputのキーボードがでなくなるバグの原因）
+        // ★ backdropFilter: 絶対に書かない
         display:"flex", alignItems:"flex-end", justifyContent:"center",
       }}
     >
       <div style={{
-        // ★ background は単色のみ。filterもbackdropFilterも一切なし
         background:"#1e2a3a",
+        // ★ backdropFilter禁止・filter禁止
+        // ★ overflowY:"auto" 禁止 → overflow:"visible"にする
+        overflow:"visible",
         border:"1px solid rgba(255,255,255,0.1)",
         borderRadius:"20px 20px 0 0",
         padding:"22px 18px 50px",
         width:"100%", maxWidth:"500px",
-        maxHeight:"88vh", overflowY:"auto",
+        // ★ maxHeightはそのまま維持（スクロールはbody側で行われる）
+        maxHeight:"88vh",
       }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"20px" }}>
           <span style={{ fontSize:"16px", fontWeight:"700" }}>{title}</span>
@@ -677,7 +689,7 @@ function Sheet({ title, children, onClose }) {
 
 // ============================================================
 // フォーム入力
-// ★ Safari対策: inputの親に余計なスタイル一切なし
+// ★ Safari対策: inputに全プロパティ明示
 // ============================================================
 function FInput({ label, value, onChange, type="text", placeholder }) {
   return (
@@ -699,6 +711,10 @@ function FInput({ label, value, onChange, type="text", placeholder }) {
           border:"1px solid rgba(255,255,255,0.15)",
           borderRadius:"10px", outline:"none",
           WebkitAppearance:"none",
+          WebkitUserSelect:"auto",
+          userSelect:"auto",
+          touchAction:"manipulation",
+          pointerEvents:"auto",
         }}
       />
     </div>
