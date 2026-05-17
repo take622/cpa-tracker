@@ -1,8 +1,7 @@
 // ============================================================
 // CPA Study Tracker - App.jsx
-// ベース: 動作確認済みバージョン（添付ファイル）
-// 修正: iOS17 Safari position:fixed キーボードバグ対策
-// 追加: 全体進捗バー
+// ベース: 同期成功・キーボード動作確認済みバージョン
+// 追加: 全体進捗バーのみ
 // FIXED_ID: CPA_ROOT_V7000 (絶対変更禁止)
 // ============================================================
 
@@ -101,51 +100,6 @@ const shuffle = (a) => {
 };
 
 // ============================================================
-// iOS17 Safari キーボードバグ対策
-// inputフォーカス時にposition:fixedを一時的にabsoluteに切り替える
-// ============================================================
-if (typeof window !== "undefined") {
-  document.addEventListener("focusin", (e) => {
-    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") {
-      document.body.classList.add("input-focused");
-    }
-  });
-  document.addEventListener("focusout", (e) => {
-    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") {
-      setTimeout(() => {
-        document.body.classList.remove("input-focused");
-      }, 100);
-    }
-  });
-}
-
-// ============================================================
-// グローバルCSS
-// iOS17対策: input-focusedクラス付与時にfixed要素をabsoluteに
-// ============================================================
-const GCSS = `
-  *, *::before, *::after { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #0d1117; }
-
-  /* iOS17 Safari キーボードバグ対策
-     inputフォーカス中はposition:fixedのトップバーをabsoluteに切り替え
-     これによりキーボードが正常に表示される */
-  body.input-focused #cpa-topbar {
-    position: absolute !important;
-  }
-
-  input, textarea {
-    font-size: 16px !important;
-    -webkit-appearance: none !important;
-    touch-action: manipulation !important;
-  }
-  button {
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-  }
-`;
-
-// ============================================================
 // 確認ダイアログ
 // ============================================================
 function ConfirmDlg({ msg, okLabel, okColor, onOk, onCancel }) {
@@ -216,105 +170,102 @@ function LoginScreen({ onLogin, onSignup }) {
   };
 
   return (
-    <>
-      <style>{GCSS}</style>
+    <div style={{
+      minHeight:"100vh",
+      background:"#0f1923",
+      display:"flex", alignItems:"center", justifyContent:"center",
+      padding:"24px 16px",
+      fontFamily:"'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif",
+    }}>
       <div style={{
-        minHeight:"100vh",
-        background:"#0f1923",
-        display:"flex", alignItems:"center", justifyContent:"center",
-        padding:"24px 16px",
-        fontFamily:"'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif",
+        width:"100%", maxWidth:"360px",
+        background:"rgba(255,255,255,0.07)",
+        border:"1px solid rgba(255,255,255,0.13)",
+        borderRadius:"20px",
+        padding:"36px 24px 40px",
       }}>
-        <div style={{
-          width:"100%", maxWidth:"360px",
-          background:"rgba(255,255,255,0.07)",
-          border:"1px solid rgba(255,255,255,0.13)",
-          borderRadius:"20px",
-          padding:"36px 24px 40px",
-        }}>
-          <div style={{ textAlign:"center", marginBottom:"28px" }}>
-            <div style={{ fontSize:"52px", lineHeight:1, marginBottom:"10px" }}>📚</div>
-            <div style={{ color:"#fff", fontSize:"20px", fontWeight:"700" }}>CPA Study Tracker</div>
-            <div style={{ color:"rgba(255,255,255,0.4)", fontSize:"12px", marginTop:"5px" }}>合格への道を、一緒に歩もう</div>
-          </div>
-
-          <div style={{ display:"flex", background:"rgba(0,0,0,0.35)", borderRadius:"10px", padding:"4px", marginBottom:"24px" }}>
-            {["ログイン","新規登録"].map((l,i) => (
-              <button key={i} onClick={() => { setIsNew(i===1); setErr(""); }} style={{
-                flex:1, padding:"10px", border:"none", borderRadius:"7px",
-                fontSize:"14px", fontWeight:"600", cursor:"pointer",
-                background: isNew===(i===1) ? "#63b3ed" : "transparent",
-                color:      isNew===(i===1) ? "#1a1a2e" : "rgba(255,255,255,0.55)",
-              }}>{l}</button>
-            ))}
-          </div>
-
-          <div style={{ marginBottom:"14px" }}>
-            <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"14px", marginBottom:"7px" }}>
-              メールアドレス
-            </label>
-            <input
-              type="email"
-              autoComplete="email"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck="false"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="example@email.com"
-              style={{
-                display:"block", width:"100%", padding:"14px",
-                fontSize:"16px", color:"#fff",
-                background:"rgba(255,255,255,0.1)",
-                border:"1px solid rgba(255,255,255,0.2)",
-                borderRadius:"10px", outline:"none",
-                WebkitAppearance:"none",
-              }}
-            />
-          </div>
-
-          <div style={{ marginBottom:"22px" }}>
-            <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"14px", marginBottom:"7px" }}>
-              パスワード
-            </label>
-            <input
-              type="password"
-              autoComplete={isNew ? "new-password" : "current-password"}
-              value={pass}
-              onChange={e => setPass(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && submit()}
-              placeholder="6文字以上"
-              style={{
-                display:"block", width:"100%", padding:"14px",
-                fontSize:"16px", color:"#fff",
-                background:"rgba(255,255,255,0.1)",
-                border:"1px solid rgba(255,255,255,0.2)",
-                borderRadius:"10px", outline:"none",
-                WebkitAppearance:"none",
-              }}
-            />
-          </div>
-
-          {err && (
-            <div style={{
-              background:"rgba(239,68,68,0.15)", border:"1px solid rgba(239,68,68,0.3)",
-              borderRadius:"8px", padding:"10px 14px",
-              color:"#fca5a5", fontSize:"13px", marginBottom:"14px",
-            }}>{err}</div>
-          )}
-
-          <button onClick={submit} disabled={busy} style={{
-            display:"block", width:"100%", padding:"15px",
-            fontSize:"16px", fontWeight:"700",
-            background: busy ? "rgba(99,179,237,0.3)" : "#4299e1",
-            border:"none", borderRadius:"10px", color:"#fff",
-            cursor: busy ? "not-allowed" : "pointer",
-          }}>
-            {busy ? "処理中..." : isNew ? "アカウント作成" : "ログイン"}
-          </button>
+        <div style={{ textAlign:"center", marginBottom:"28px" }}>
+          <div style={{ fontSize:"52px", lineHeight:1, marginBottom:"10px" }}>📚</div>
+          <div style={{ color:"#fff", fontSize:"20px", fontWeight:"700" }}>CPA Study Tracker</div>
+          <div style={{ color:"rgba(255,255,255,0.4)", fontSize:"12px", marginTop:"5px" }}>合格への道を、一緒に歩もう</div>
         </div>
+
+        <div style={{ display:"flex", background:"rgba(0,0,0,0.35)", borderRadius:"10px", padding:"4px", marginBottom:"24px" }}>
+          {["ログイン","新規登録"].map((l,i) => (
+            <button key={i} onClick={() => { setIsNew(i===1); setErr(""); }} style={{
+              flex:1, padding:"10px", border:"none", borderRadius:"7px",
+              fontSize:"14px", fontWeight:"600", cursor:"pointer",
+              background: isNew===(i===1) ? "#63b3ed" : "transparent",
+              color:      isNew===(i===1) ? "#1a1a2e" : "rgba(255,255,255,0.55)",
+            }}>{l}</button>
+          ))}
+        </div>
+
+        <div style={{ marginBottom:"14px" }}>
+          <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"14px", marginBottom:"7px" }}>
+            メールアドレス
+          </label>
+          <input
+            type="email"
+            autoComplete="email"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck="false"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            placeholder="example@email.com"
+            style={{
+              display:"block", width:"100%", padding:"14px",
+              fontSize:"16px", color:"#fff",
+              background:"rgba(255,255,255,0.1)",
+              border:"1px solid rgba(255,255,255,0.2)",
+              borderRadius:"10px", outline:"none",
+              WebkitAppearance:"none",
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom:"22px" }}>
+          <label style={{ display:"block", color:"rgba(255,255,255,0.65)", fontSize:"14px", marginBottom:"7px" }}>
+            パスワード
+          </label>
+          <input
+            type="password"
+            autoComplete={isNew ? "new-password" : "current-password"}
+            value={pass}
+            onChange={e => setPass(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && submit()}
+            placeholder="6文字以上"
+            style={{
+              display:"block", width:"100%", padding:"14px",
+              fontSize:"16px", color:"#fff",
+              background:"rgba(255,255,255,0.1)",
+              border:"1px solid rgba(255,255,255,0.2)",
+              borderRadius:"10px", outline:"none",
+              WebkitAppearance:"none",
+            }}
+          />
+        </div>
+
+        {err && (
+          <div style={{
+            background:"rgba(239,68,68,0.15)", border:"1px solid rgba(239,68,68,0.3)",
+            borderRadius:"8px", padding:"10px 14px",
+            color:"#fca5a5", fontSize:"13px", marginBottom:"14px",
+          }}>{err}</div>
+        )}
+
+        <button onClick={submit} disabled={busy} style={{
+          display:"block", width:"100%", padding:"15px",
+          fontSize:"16px", fontWeight:"700",
+          background: busy ? "rgba(99,179,237,0.3)" : "#4299e1",
+          border:"none", borderRadius:"10px", color:"#fff",
+          cursor: busy ? "not-allowed" : "pointer",
+        }}>
+          {busy ? "処理中..." : isNew ? "アカウント作成" : "ログイン"}
+        </button>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -335,12 +286,9 @@ export default function App() {
   }, []);
 
   if (loading) return (
-    <>
-      <style>{GCSS}</style>
-      <div style={{ minHeight:"100vh", background:"#0d1117", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontSize:"17px", fontFamily:"sans-serif" }}>
-        読み込み中...
-      </div>
-    </>
+    <div style={{ minHeight:"100vh", background:"#0d1117", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontSize:"17px", fontFamily:"sans-serif" }}>
+      読み込み中...
+    </div>
   );
 
   if (!user) return (
@@ -418,10 +366,7 @@ function Dashboard({ user, onLogout }) {
     if (lastMonday !== mon) setDoc(P(uid).settings, { lastResetMonday:mon, updatedAt:serverTimestamp() }, { merge:true }).catch(console.error);
   }, [lastMonday]);
 
-  // 計算
   const totalCur      = books.reduce((s,b) => s+(b.currentPage||0), 0);
-  const totalPages    = books.reduce((s,b) => s+(b.totalPages||0), 0);
-  const overallPct    = totalPages > 0 ? Math.min(100, Math.round(totalCur / totalPages * 100)) : 0;
   const todayProgress = Math.max(0, totalCur - (todayLog.startOfDayPages||0));
   const remaining     = Math.max(0, weeklyGoal - todayProgress);
 
@@ -489,128 +434,94 @@ function Dashboard({ user, onLogout }) {
   const font = "'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif";
 
   return (
-    <>
-      <style>{GCSS}</style>
-      <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#0d1117,#1a1f35)", fontFamily:font, color:"#e2e8f0", paddingBottom:"60px" }}>
+    <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#0d1117,#1a1f35)", fontFamily:font, color:"#e2e8f0", paddingBottom:"60px" }}>
 
-        {/* トップバー: id="cpa-topbar" を付与（CSS切り替え対象） */}
-        <div id="cpa-topbar" style={{ position:"sticky", top:0, zIndex:100, background:"#0d1117", borderBottom:"1px solid rgba(255,255,255,0.08)", padding:"10px 14px", display:"flex", alignItems:"center", gap:"8px" }}>
-          <button onClick={nextMsg} style={{ background:"none", border:"none", fontSize:"26px", cursor:"pointer", padding:"4px", lineHeight:1 }}>📚</button>
-          <div style={{ flex:1, textAlign:"center" }}>
-            <div style={{ fontSize:"20px", fontWeight:"800", color:"#63b3ed", letterSpacing:"0.04em", lineHeight:1.1 }}>{hh}:{mm}:{ss}</div>
-            <div style={{ fontSize:"11px", color:"rgba(255,255,255,0.4)", marginTop:"2px" }}>{dateStr}</div>
-          </div>
-          <div style={{ display:"flex", gap:"6px", alignItems:"center" }}>
-            <div style={{ width:"8px", height:"8px", borderRadius:"50%", background:syncColor }} />
-            <Btn onClick={openSettings} sm>⚙️</Btn>
-            <Btn onClick={() => setConfirmOut(true)} sm>🚪</Btn>
-          </div>
+      <div style={{ position:"sticky", top:0, zIndex:100, background:"#0d1117", borderBottom:"1px solid rgba(255,255,255,0.08)", padding:"10px 14px", display:"flex", alignItems:"center", gap:"8px" }}>
+        <button onClick={nextMsg} style={{ background:"none", border:"none", fontSize:"26px", cursor:"pointer", padding:"4px", lineHeight:1 }}>📚</button>
+        <div style={{ flex:1, textAlign:"center" }}>
+          <div style={{ fontSize:"20px", fontWeight:"800", color:"#63b3ed", letterSpacing:"0.04em", lineHeight:1.1 }}>{hh}:{mm}:{ss}</div>
+          <div style={{ fontSize:"11px", color:"rgba(255,255,255,0.4)", marginTop:"2px" }}>{dateStr}</div>
         </div>
-
-        {/* 合格くんバブル */}
-        {showMascot && (
-          <div style={{ position:"fixed", top:"64px", left:"50%", transform:"translateX(-50%)", zIndex:200, background:"#2d3748", border:"1px solid rgba(99,179,237,0.4)", borderRadius:"14px", padding:"11px 18px", maxWidth:"88vw", fontSize:"14px", color:"#bee3f8", boxShadow:"0 8px 28px rgba(0,0,0,0.45)" }}>
-            {mascotMsg}
-          </div>
-        )}
-
-        {/* サマリーカード */}
-        <div style={{ padding:"14px", display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px", maxWidth:"600px", margin:"0 auto" }}>
-          <SCard icon="📅" label="残ノルマ"   value={remaining}    unit="p"  color="#fc8181" />
-          <SCard icon="✏️" label="今日の進捗" value={todayProgress} unit="p"  color="#68d391" />
-          <SCard icon="🎯" label="週間目標"   value={weeklyGoal}   unit="p"  color="#63b3ed" onClick={openSettings} />
-          <SCard icon="📖" label="教材数"     value={books.length} unit="冊" color="#f6ad55" />
+        <div style={{ display:"flex", gap:"6px", alignItems:"center" }}>
+          <div style={{ width:"8px", height:"8px", borderRadius:"50%", background:syncColor }} />
+          <Btn onClick={openSettings} sm>⚙️</Btn>
+          <Btn onClick={() => setConfirmOut(true)} sm>🚪</Btn>
         </div>
-
-        {/* 全体進捗バー */}
-        {books.length > 0 && (
-          <div style={{ padding:"0 14px 4px", maxWidth:"600px", margin:"0 auto" }}>
-            <div style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(139,92,246,0.25)", borderRadius:"14px", padding:"14px 16px" }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"10px" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:"7px" }}>
-                  <span style={{ fontSize:"16px" }}>🎓</span>
-                  <span style={{ fontSize:"13px", color:"rgba(255,255,255,0.65)", fontWeight:"600" }}>全体進捗</span>
-                </div>
-                <div>
-                  <span style={{ fontSize:"24px", fontWeight:"800", color:"#a78bfa", lineHeight:1 }}>{overallPct}</span>
-                  <span style={{ fontSize:"13px", color:"rgba(255,255,255,0.5)" }}>%</span>
-                  <span style={{ fontSize:"11px", color:"rgba(255,255,255,0.35)", marginLeft:"6px" }}>（{totalCur} / {totalPages} p）</span>
-                </div>
-              </div>
-              <div style={{ height:"8px", background:"rgba(255,255,255,0.08)", borderRadius:"4px", overflow:"hidden" }}>
-                <div style={{ height:"100%", width:`${overallPct}%`, borderRadius:"4px", background: overallPct >= 100 ? "#68d391" : "linear-gradient(90deg,#7c3aed,#a78bfa)", transition:"width .6s ease" }} />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 教材リスト */}
-        <div style={{ padding:"14px", maxWidth:"600px", margin:"0 auto" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"12px" }}>
-            <span style={{ fontSize:"15px", fontWeight:"700", color:"rgba(255,255,255,0.75)" }}>📚 教材一覧</span>
-            <Btn onClick={openAdd} accent>＋ 追加</Btn>
-          </div>
-          {books.length === 0 ? (
-            <div style={{ textAlign:"center", padding:"40px 20px", color:"rgba(255,255,255,0.25)", border:"2px dashed rgba(255,255,255,0.08)", borderRadius:"16px" }}>
-              <div style={{ fontSize:"36px", marginBottom:"10px" }}>📭</div>
-              <div>「＋ 追加」から教材を登録してください</div>
-            </div>
-          ) : books.map((b,i) => (
-            <BookCard key={b.id} book={b} index={i} total={books.length}
-              onEdit={() => openEdit(b)}
-              onDelete={() => setConfirmDel(b.id)}
-              onUp={() => moveBook(i,-1)}
-              onDown={() => moveBook(i,1)}
-              onPage={d => changePage(b,d)}
-            />
-          ))}
-        </div>
-
-        {/* 教材モーダル */}
-        {(modal==="add"||modal==="edit") && (
-          <Sheet title={modal==="add" ? "📗 教材を追加" : "✏️ 教材を編集"} onClose={() => setModal(null)}>
-            <FInput label="教材名" value={form.name} onChange={v=>setForm(p=>({...p,name:v}))} placeholder="例: 財務会計論テキスト" />
-            <FInput label="総ページ数" value={form.total} onChange={v=>setForm(p=>({...p,total:v}))} type="number" placeholder="例: 500" />
-            <FInput label="現在のページ" value={form.cur} onChange={v=>setForm(p=>({...p,cur:v}))} type="number" placeholder="例: 120" />
-            <div style={{ marginBottom:"18px" }}>
-              <label style={LS}>表紙画像（任意）</label>
-              <input type="file" accept="image/*" onChange={handleImg}
-                style={{ color:"rgba(255,255,255,0.6)", fontSize:"14px", display:"block" }} />
-              {form.img && <img src={form.img} alt="" style={{ width:"54px",height:"72px",objectFit:"cover",borderRadius:"6px",marginTop:"8px" }} />}
-            </div>
-            <Btn onClick={saveBook} accent full>{modal==="add" ? "追加する" : "保存する"}</Btn>
-          </Sheet>
-        )}
-
-        {/* 設定モーダル */}
-        {modal==="settings" && (
-          <Sheet title="⚙️ 設定" onClose={() => setModal(null)}>
-            <FInput label="週間目標ページ数" value={goalForm} onChange={setGoalForm} type="number" placeholder="例: 100" />
-            <Btn onClick={saveGoal} accent full>保存する</Btn>
-            <div style={{ marginTop:"16px", padding:"12px", background:"rgba(255,255,255,0.04)", borderRadius:"10px", fontSize:"12px", color:"rgba(255,255,255,0.3)", lineHeight:1.9 }}>
-              <div>🔑 UID: {uid.slice(0,12)}...</div>
-              <div>📡 固定ID: {FIXED_ID}</div>
-              <div>📱 同期: {sync==="ok"?"✅ 正常":sync==="saving"?"⏳ 保存中":"❌ エラー"}</div>
-            </div>
-          </Sheet>
-        )}
-
-        {confirmDel && (
-          <ConfirmDlg msg="この教材を削除しますか？" okLabel="削除する" okColor="#e53e3e"
-            onOk={doDelete} onCancel={() => setConfirmDel(null)} />
-        )}
-        {confirmOut && (
-          <ConfirmDlg msg="ログアウトしますか？" okLabel="ログアウト" okColor="#4299e1"
-            onOk={() => { setConfirmOut(false); onLogout(); }} onCancel={() => setConfirmOut(false)} />
-        )}
       </div>
-    </>
+
+      {showMascot && (
+        <div style={{ position:"fixed", top:"64px", left:"50%", transform:"translateX(-50%)", zIndex:200, background:"#2d3748", border:"1px solid rgba(99,179,237,0.4)", borderRadius:"14px", padding:"11px 18px", maxWidth:"88vw", fontSize:"14px", color:"#bee3f8", boxShadow:"0 8px 28px rgba(0,0,0,0.45)" }}>
+          {mascotMsg}
+        </div>
+      )}
+
+      <div style={{ padding:"14px", display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px", maxWidth:"600px", margin:"0 auto" }}>
+        <SCard icon="📅" label="残ノルマ"   value={remaining}    unit="p"  color="#fc8181" />
+        <SCard icon="✏️" label="今日の進捗" value={todayProgress} unit="p"  color="#68d391" />
+        <SCard icon="🎯" label="週間目標"   value={weeklyGoal}   unit="p"  color="#63b3ed" onClick={openSettings} />
+        <SCard icon="📖" label="教材数"     value={books.length} unit="冊" color="#f6ad55" />
+      </div>
+
+      <div style={{ padding:"14px", maxWidth:"600px", margin:"0 auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"12px" }}>
+          <span style={{ fontSize:"15px", fontWeight:"700", color:"rgba(255,255,255,0.75)" }}>📚 教材一覧</span>
+          <Btn onClick={openAdd} accent>＋ 追加</Btn>
+        </div>
+        {books.length === 0 ? (
+          <div style={{ textAlign:"center", padding:"40px 20px", color:"rgba(255,255,255,0.25)", border:"2px dashed rgba(255,255,255,0.08)", borderRadius:"16px" }}>
+            <div style={{ fontSize:"36px", marginBottom:"10px" }}>📭</div>
+            <div>「＋ 追加」から教材を登録してください</div>
+          </div>
+        ) : books.map((b,i) => (
+          <BookCard key={b.id} book={b} index={i} total={books.length}
+            onEdit={() => openEdit(b)}
+            onDelete={() => setConfirmDel(b.id)}
+            onUp={() => moveBook(i,-1)}
+            onDown={() => moveBook(i,1)}
+            onPage={d => changePage(b,d)}
+          />
+        ))}
+      </div>
+
+      {(modal==="add"||modal==="edit") && (
+        <Sheet title={modal==="add" ? "📗 教材を追加" : "✏️ 教材を編集"} onClose={() => setModal(null)}>
+          <FInput label="教材名" value={form.name} onChange={v=>setForm(p=>({...p,name:v}))} placeholder="例: 財務会計論テキスト" />
+          <FInput label="総ページ数" value={form.total} onChange={v=>setForm(p=>({...p,total:v}))} type="number" placeholder="例: 500" />
+          <FInput label="現在のページ" value={form.cur} onChange={v=>setForm(p=>({...p,cur:v}))} type="number" placeholder="例: 120" />
+          <div style={{ marginBottom:"18px" }}>
+            <label style={LS}>表紙画像（任意）</label>
+            <input type="file" accept="image/*" onChange={handleImg}
+              style={{ color:"rgba(255,255,255,0.6)", fontSize:"14px", display:"block" }} />
+            {form.img && <img src={form.img} alt="" style={{ width:"54px",height:"72px",objectFit:"cover",borderRadius:"6px",marginTop:"8px" }} />}
+          </div>
+          <Btn onClick={saveBook} accent full>{modal==="add" ? "追加する" : "保存する"}</Btn>
+        </Sheet>
+      )}
+
+      {modal==="settings" && (
+        <Sheet title="⚙️ 設定" onClose={() => setModal(null)}>
+          <FInput label="週間目標ページ数" value={goalForm} onChange={setGoalForm} type="number" placeholder="例: 100" />
+          <Btn onClick={saveGoal} accent full>保存する</Btn>
+          <div style={{ marginTop:"16px", padding:"12px", background:"rgba(255,255,255,0.04)", borderRadius:"10px", fontSize:"12px", color:"rgba(255,255,255,0.3)", lineHeight:1.9 }}>
+            <div>🔑 UID: {uid.slice(0,12)}...</div>
+            <div>📡 固定ID: {FIXED_ID}</div>
+            <div>📱 同期: {sync==="ok"?"✅ 正常":sync==="saving"?"⏳ 保存中":"❌ エラー"}</div>
+          </div>
+        </Sheet>
+      )}
+
+      {confirmDel && (
+        <ConfirmDlg msg="この教材を削除しますか？" okLabel="削除する" okColor="#e53e3e"
+          onOk={doDelete} onCancel={() => setConfirmDel(null)} />
+      )}
+      {confirmOut && (
+        <ConfirmDlg msg="ログアウトしますか？" okLabel="ログアウト" okColor="#4299e1"
+          onOk={() => { setConfirmOut(false); onLogout(); }} onCancel={() => setConfirmOut(false)} />
+      )}
+    </div>
   );
 }
 
-// ============================================================
-// 教材カード
-// ============================================================
 function BookCard({ book, index, total, onEdit, onDelete, onUp, onDown, onPage }) {
   const pct = book.totalPages > 0 ? Math.min(100, Math.round((book.currentPage||0)/book.totalPages*100)) : 0;
   const bar = pct>=100?"#68d391":pct>=50?"#63b3ed":"#f6ad55";
@@ -644,9 +555,6 @@ function BookCard({ book, index, total, onEdit, onDelete, onUp, onDown, onPage }
   );
 }
 
-// ============================================================
-// サマリーカード
-// ============================================================
 function SCard({ icon, label, value, unit, color, onClick }) {
   return (
     <div onClick={onClick} style={{ background:"rgba(255,255,255,0.04)", border:`1px solid ${color}28`, borderRadius:"14px", padding:"13px 12px", cursor:onClick?"pointer":"default" }}>
@@ -659,9 +567,6 @@ function SCard({ icon, label, value, unit, color, onClick }) {
   );
 }
 
-// ============================================================
-// ボトムシート
-// ============================================================
 function Sheet({ title, children, onClose }) {
   return (
     <div
@@ -692,9 +597,6 @@ function Sheet({ title, children, onClose }) {
   );
 }
 
-// ============================================================
-// フォーム入力
-// ============================================================
 function FInput({ label, value, onChange, type="text", placeholder }) {
   return (
     <div style={{ marginBottom:"16px" }}>
@@ -721,9 +623,6 @@ function FInput({ label, value, onChange, type="text", placeholder }) {
   );
 }
 
-// ============================================================
-// ボタン
-// ============================================================
 function Btn({ children, onClick, color="#63b3ed", disabled=false, accent=false, sm=false, full=false }) {
   return (
     <button
